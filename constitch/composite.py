@@ -107,6 +107,9 @@ class CompositeImage:
                 Another composite instance that will be added to this one. All images from
                 it are added to this instance. All image positions are added, mantaining
                 the scale_factors of both composites.
+
+            Returns: list of indices
+                returns the list of indices of the images added from the other composite.
         """
         scale_conversion = 1 if other_composite.scale == 1 else 1 / other_composite.scale
         start_index = len(self.images)
@@ -127,6 +130,8 @@ class CompositeImage:
         for (i,j), constraint in other_composite.constraints.items():
             self.constraints[(i+start_index,j+start_index)] = Constraint(
                     constraint.score, constraint.dx * scale_conversion, constraint.dy * scale_conversion, constraint.modeled)
+
+        return list(range(start_index, len(self.images)))
 
     def set_scale(self, scale_factor):
         """ Sets the scale factor of the composite. Normally this doesn't need to be changed,
