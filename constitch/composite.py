@@ -202,7 +202,7 @@ class CompositeImage:
                 The sequence of pairs of indices of the images that overlap without constraints.
         """
         pairs = self.find_pairs(needs_overlap=needs_overlap)
-        mask = [pair in self.constraints for pair in pairs]
+        mask = [(i,j) not in self.constraints for i,j in pairs]
         return pairs[mask]
 
     def calc_constraints(self, pairs=None, return_constraints=False):
@@ -523,7 +523,6 @@ class CompositeImage:
 
         example_image = self.imagearr(real_images[0])
         full_shape = tuple((maxes - mins) * self.scale) + example_image.shape[2:]
-        print (full_shape)
         full_image = np.zeros(full_shape, dtype=example_image.dtype)
         counts = np.zeros(full_shape[:2] + (1,) * (len(full_shape)-2), dtype=np.uint8)
 
@@ -537,15 +536,12 @@ class CompositeImage:
         for i in indices:
             pos1 = ((self.boxes[i].pos1 - mins) * self.scale).astype(int)
             pos2 = ((self.boxes[i].pos2 - mins) * self.scale).astype(int)
-            print (pos1, pos2, full_image.shape)
             image = self.imagearr(real_images[i])
-            print (image.shape, pos2 - pos1, pos1, pos2, self.scale)
             if np.any(pos2 - pos1 != image.shape[:2]):
                 warnings.warn("resizing some images")
                 image = skimage.transform.resize(image, pos2 - pos1)
 
             image_counts = counts[pos1[0]:pos2[0],pos1[1]:pos2[1]]
-            print (image_counts.shape, pos2 - pos1, full_image.dtype, full_image.shape, counts.shape)
             cur_image = full_image[pos1[0]:pos2[0],pos1[1]:pos2[1]] 
             if np.issubdtype(example_image.dtype, np.integer):
                 cur_image[...] = (cur_image.astype(int) * image_counts + image) // (image_counts + 1)
