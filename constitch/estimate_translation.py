@@ -1,4 +1,5 @@
 import numpy as np
+import skimage.io
 import itertools
 
 
@@ -11,6 +12,7 @@ def pcm(image1, image2):
     F1 = np.fft.fft2(image1)
     F2 = np.fft.fft2(image2)
     FC = F1 * np.conjugate(F2)
+    del F1, F2
     return np.fft.ifft2(FC / np.abs(FC)).real.astype(np.float32)
 
 def pcm_fft(F1, F2):
@@ -117,6 +119,7 @@ def interpret_translation(image1, image2, yins, xins, ymin, ymax, xmin, xmax, n 
     ymagss[1][ymagss[0] == 0] = 0
     xmagss = [xins, sizeX - xins]
     xmagss[1][xmagss[0] == 0] = 0
+    del yins, xins
 
     # concatenate all the candidates
     _poss = []
@@ -141,25 +144,42 @@ def interpret_translation(image1, image2, yins, xins, ymin, ymax, xmin, xmax, n 
                 subI1 = extract_overlap_subregion(image1, yval, xval)
                 subI2 = extract_overlap_subregion(image2, -yval, -xval)
                 ncc_val = ncc(subI1, subI2)
+                del subI1, subI2
                 if ncc_val > _ncc:
                     _ncc = float(ncc_val)
                     y = int(yval)
                     x = int(xval)
     return _ncc, y, x
 
+
+
+
+
 def calculate_offset(image1, image2, fft1=None, fft2=None):
+    if type(image1) == str:
+        image1 = skimage.io.imread(image1)
+    if type(image2) == str:
+        image2 = skimage.io.imread(image2)
+
     sizeY, sizeX = max(image1.shape[0], image2.shape[0]), max(image1.shape[1], image2.shape[1])
     if fft1 is None or fft2 is None:
         PCM = pcm(image1, image2).real
     else:
         PCM = pcm_fft(fft1, fft2).real
     yins, xins, _ = multi_peak_max(PCM)
+    del PCM
     max_peak = interpret_translation(image1, image2, yins, xins, -sizeY, sizeY, -sizeX, sizeX)
     return max_peak
 
 def score_offset(image1, image2, dx, dy):
+    if type(image1) == str:
+        image1 = skimage.io.imread(image1)
+    if type(image2) == str:
+        image2 = skimage.io.imread(image2)
+
     subI1 = extract_overlap_subregion(image1, dx, dy)
     subI2 = extract_overlap_subregion(image2, -dx, -dy)
+    del image1, image2
     ncc_val = ncc(subI1, subI2)
     return ncc_val
     

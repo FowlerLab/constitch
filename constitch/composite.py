@@ -6,6 +6,7 @@ import matplotlib.pyplot as plt
 import skimage.filters
 import sklearn.linear_model
 import sklearn.mixture
+import imageio.v3 as iio
 import warnings
 
 from .estimate_translation import calculate_offset, score_offset
@@ -29,8 +30,14 @@ class BBox:
                   | ((self.pos1 >= otherbox.pos1) & (self.pos1 < otherbox.pos2)))
         collides = (((self.pos1 <= otherbox.pos1) & (self.pos2 >= otherbox.pos1))
                   | ((self.pos1 >= otherbox.pos1) & (self.pos1 <= otherbox.pos2)))
-        result = np.sum(collides) == collides.shape[0] and np.sum(contains) >= contains.shape[0] - 1
+        result = np.all(collides) and np.sum(contains) >= contains.shape[0] - 1
         return result
+
+    def overlaps(self, otherbox):
+        contains = (((self.pos1 <= otherbox.pos1) & (self.pos2 > otherbox.pos1))
+                  | ((self.pos1 >= otherbox.pos1) & (self.pos1 < otherbox.pos2)))
+        return np.all(contains)
+
 
 class CompositeImage:
     def __init__(self, precalculate_fft=False, debug=True, progress=False, executor=None):
@@ -48,12 +55,34 @@ class CompositeImage:
 
     def set_logging(self, debug=True, progress=False):
         self.debug, self.progress = utils.log_env(debug, progress)
-        
+
+    def print_mem_usage(self):
+        mem_images = sum((image.nbytes if type(image) == np.ndarray else 0) for image in self.images)
+        self.debug("Using {} bytes ({}) for images".format(mem_images, utils.human_readable(mem_images)))
+        if self.precalculate_fft:
+            mem_ffts = sum(image.nbytes for image in self.ffts)
+            self.debug("Using {} bytes ({}) for ffts".format(mem_ffts, utils.human_readable(mem_ffts)))
+            mem_images += mem_ffts
+        self.debug("Total: {} ({})".format(mem_images, utils.human_readable(mem_images)))
+    
+    def imagearr(self, image):
+        if type(image) == str:
+            return iio.imread(image)
+        return image
+
+    def imageshape(self, image):
+        if type(image) == str:
+            return iio.improps(image).shape
+        return image.shape
+
     def add_images(self, images, positions, scale='pixel'):
         """ Adds images to the composite
 
-            images: np.ndarray shape (N, W, H) or list of N np.ndarrays shape (W, H)
-                The images that will be stitched together.
+            images: np.ndarray shape (N, W, H) or list of N np.ndarrays shape (W, H) or list of strings
+                The images that will be stitched together. Can pass a list of
+                paths that will be opened by imageio.v3.imread when needed.
+                Passing paths will require less memory as images are not stored,
+                but will increase computation time.
 
             positions: np.ndarray shape (N, D)
                 Specifies the extimated positions of each image. The approx values are
@@ -70,8 +99,9 @@ class CompositeImage:
                 If a sequence is given, each element can be any of the previous values,
                 which are applied to each axis.
         """
-        assert len(images[0].shape) == 2, "Only 2d images are supported"
-        assert len(images[0].shape) == positions.shape[1]
+        positions = np.asarray(positions)
+        assert len(self.imageshape(images[0])) == 2, "Only 2d images are supported"
+        assert len(self.imageshape(images[0])) == positions.shape[1]
 
         n_dims = positions.shape[1]
         self.n_dims = n_dims
@@ -79,26 +109,26 @@ class CompositeImage:
         if scale == 'pixel':
             scale = 1
         if scale == 'tile':
-            assert type(images) == np.ndarray, ("Using scale='tile' is only supported with"
-                    " images as a np.ndarray, not a list of ndarrays")
+            #assert type(images) == np.ndarray, ("Using scale='tile' is only supported with"
+            #        " images as a np.ndarray, not a list of ndarrays")
             scale = np.full(n_dims, 1)
-            scale[:2] = images.shape[1:]
+            scale[:2] = self.imageshape(images[0])
         if np.isscalar(scale):
             scale = np.full(n_dims, scale)
 
         for i in range(len(images)):
             self.boxes.append(BBox(
                 positions[i] * scale,
-                positions[i] * scale + np.array(images[i].shape) * self.scale
+                positions[i] * scale + np.array(self.imageshape(images[i])) * self.scale
             ))
         
         self.images.extend(images)
 
         if self.precalculate_fft:
             if self.executor is not None:
-                self.ffts.extend(self.progress(self.executor.map(np.fft.fft2, images), total=len(images)))
+                self.ffts.extend(self.progress(self.executor.map(fft_job, images), total=len(images)))
             else:
-                self.ffts.extend(self.progress(map(np.fft.fft2, images), total=len(images)))
+                self.ffts.extend(self.progress(map(fft_job, images), total=len(images)))
 
     def merge(self, other_composite):
         """ Adds all images and constraints from another montage into this one.
@@ -145,32 +175,35 @@ class CompositeImage:
         """
         self.scale = scale_factor
 
-    def find_pairs(self):
+    def find_pairs(self, needs_overlap=False):
         """ Finds all pairs of images that overlap, based on the estimated positions
 
             Returns: np.ndarray shape (N, 2)
                 The sequence of pairs of indices of the images that overlap.
         """
         pairs = []
-        for i in range(len(self.images)):
-            for j in range(i+1,len(self.images)):
-                if self.boxes[i].collides(self.boxes[j]):
-                    pairs.append((i,j))
+        if needs_overlap:
+            for i in range(len(self.images)):
+                for j in range(i+1,len(self.images)):
+                    if self.boxes[i].overlaps(self.boxes[j]):
+                        pairs.append((i,j))
+        else:
+            for i in range(len(self.images)):
+                for j in range(i+1,len(self.images)):
+                    if self.boxes[i].collides(self.boxes[j]):
+                        pairs.append((i,j))
         return np.array(pairs)
 
-    def find_unconstrained_pairs(self):
+    def find_unconstrained_pairs(self, needs_overlap=False):
         """ Finds all pairs of images that overlap based on the estimated positions and
         that don't already have a constraint.
 
             Returns: np.ndarray shape (N, 2)
                 The sequence of pairs of indices of the images that overlap without constraints.
         """
-        pairs = []
-        for i in range(len(self.images)):
-            for j in range(i+1,len(self.images)):
-                if (i,j) not in self.constraints and self.boxes[i].collides(self.boxes[j]):
-                    pairs.append((i,j))
-        return np.array(pairs)
+        pairs = self.find_pairs(needs_overlap=needs_overlap)
+        mask = [pair in self.constraints for pair in pairs]
+        return pairs[mask]
 
     def calc_constraints(self, pairs=None, return_constraints=False):
         """ Estimates the pairwise translations of images and add thems as constraints
@@ -248,10 +281,8 @@ class CompositeImage:
                 if len(fake_pairs) == len(real_consts): break
             if len(fake_pairs) == len(real_consts): break
 
-        self.debug('Calculating random pair constraints')
         fake_consts = self.calc_constraints(fake_pairs, return_constraints=True).values()
         scores = np.array([const.score for const in real_consts] + [const.score for const in fake_consts])
-        self.debug('  done')
 
         #fig, axis = plt.subplots()
         #axis.hist(scores, bins=15)
@@ -259,9 +290,7 @@ class CompositeImage:
 
         #thresh = skimage.filters.threshold_otsu(scores)
         mix_model = sklearn.mixture.GaussianMixture(n_components=2, random_state=random_state)
-        self.debug('Training Gaussian mixture model on scores')
         mix_model.fit(scores.reshape(-1,1))
-        self.debug('  done')
         
         scale1, scale2 = mix_model.weights_.flatten()
         mean1, mean2 = mix_model.means_.flatten()
@@ -278,7 +307,7 @@ class CompositeImage:
 
         inside_sqrt = b*b - 4*a*c
         if (inside_sqrt < 0):
-            warnings.warning("unable to find decision boundary for gaussian model: no solution to equation."
+            warnings.warn("unable to find decision boundary for gaussian model: no solution to equation."
                             "Falling back on mean threshold")
             return (mean1 + mean2) / 2
 
@@ -292,7 +321,7 @@ class CompositeImage:
 
         if (solution1 < mean1 or solution1 > mean2) and (solution2 < mean1 or solution2 > mean2):
             # neither solution between means, only case is means are the same
-            warnings.warning("unable to find decision boundary for gaussian model: means are the same."
+            warnings.warn("unable to find decision boundary for gaussian model: means are the same."
                             " Falling back on mean threshold")
             return (mean1 + mean2) / 2
 
@@ -450,7 +479,7 @@ class CompositeImage:
         return poses
 
 
-    def stitch_images(self, indices=None, real_images=None, bg_value=None, return_bg_mask=False):
+    def stitch_images(self, indices=None, real_images=None, bg_value=None, return_bg_mask=False, keep_zero=False):
         """ Combines images in the composite into a single image
             
             indices: sequence of int
@@ -468,6 +497,11 @@ class CompositeImage:
                 If True a boolean mask of the background, pixels with no images
                 in them, is returned.
 
+            keep_zero: bool
+                Whether or not to keep the origin in the result. If true this could
+                result in extra blank space, which might be necessary when lining up
+                multiple images. Otherwise the min of the positions is subtracted
+
             Returns: np.ndarray
                 image stitched together
         """
@@ -480,35 +514,40 @@ class CompositeImage:
         for i in indices[1:]:
             mins = np.minimum(mins, self.boxes[i].pos1[:2])
             maxes = np.maximum(maxes, self.boxes[i].pos2[:2])
+
+        if keep_zero:
+            mins = np.zeros_like(mins)
         
         if real_images is None:
             real_images = self.images
 
-        full_shape = tuple((maxes - mins) * self.scale) + real_images[0].shape[2:]
+        example_image = self.imagearr(real_images[0])
+        full_shape = tuple((maxes - mins) * self.scale) + example_image.shape[2:]
         print (full_shape)
-        full_image = np.zeros(full_shape, dtype=self.images[0].dtype)
+        full_image = np.zeros(full_shape, dtype=example_image.dtype)
         counts = np.zeros(full_shape[:2] + (1,) * (len(full_shape)-2), dtype=np.uint8)
 
-        if np.issubdtype(real_images[0].dtype, int):
+        if np.issubdtype(example_image.dtype, int):
             div = lambda x,y: x // y
             castdtype = int
         else:
             div = lambda x,y: x / y
-            castdtype = real_images[0].dtype
+            castdtype = example_image.dtype
 
         for i in indices:
             pos1 = ((self.boxes[i].pos1 - mins) * self.scale).astype(int)
             pos2 = ((self.boxes[i].pos2 - mins) * self.scale).astype(int)
             print (pos1, pos2, full_image.shape)
-            image = real_images[i]
+            image = self.imagearr(real_images[i])
+            print (image.shape, pos2 - pos1, pos1, pos2, self.scale)
             if np.any(pos2 - pos1 != image.shape[:2]):
-                print ("Warning: resizing some images")
+                warnings.warn("resizing some images")
                 image = skimage.transform.resize(image, pos2 - pos1)
 
             image_counts = counts[pos1[0]:pos2[0],pos1[1]:pos2[1]]
             print (image_counts.shape, pos2 - pos1, full_image.dtype, full_image.shape, counts.shape)
             cur_image = full_image[pos1[0]:pos2[0],pos1[1]:pos2[1]] 
-            if np.issubdtype(real_images[0].dtype, np.integer):
+            if np.issubdtype(example_image.dtype, np.integer):
                 cur_image[...] = (cur_image.astype(int) * image_counts + image) // (image_counts + 1)
             else:
                 cur_image[...] = (cur_image * image_counts + image) / (image_counts + 1)
@@ -520,3 +559,9 @@ class CompositeImage:
         if return_bg_mask:
             return full_image, counts!=0
         return full_image
+
+def fft_job(image):
+    if type(image) == str:
+        image = iio.imread(image)
+    return np.fft.fft2(image)
+
