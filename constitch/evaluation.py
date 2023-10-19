@@ -82,14 +82,16 @@ def evaluate_stitching1(image):
 import sklearn.linear_model
 import matplotlib.pyplot as plt
 
-def evaluate_stitching2(image, radius=10):
+def evaluate_stitching2(image, radius=10, innerradius=2):
+    image = (image - image.mean()) / image.std()
+
     #shift1, shift2 = (4,6), (6,2)
     #image = ((image.astype(int) + np.roll(image, shift1, axis=(0,1)) // 2 + np.roll(image, shift2, axis=(0,1))) // 3).astype(image.dtype)
     mask = np.ones((radius*2 + 1, radius*2 + 1), dtype=bool)
-    mask[radius-2:radius+3,radius-2:radius+3] = False
+    mask[radius-innerradius:radius+innerradius+1,radius-innerradius:radius+innerradius+1] = False
     mask[radius+1:,:] = False
     mask[radius,radius:] = False
-    print (mask.astype(int))
+    #print (mask.astype(int))
 
     regions = []
     values = []
@@ -107,24 +109,65 @@ def evaluate_stitching2(image, radius=10):
 
     regions = np.array(regions)
     values = np.array(values)
-    print (regions)
-    print (regions.shape)
+    #print (regions)
+    #print (regions.shape)
     
     #model = sklearn.linear_model.RANSACRegressor(random_state=1245)
     model = sklearn.linear_model.LinearRegression(fit_intercept=True)
     model.fit(regions, values)
 
     error = np.mean((model.predict(regions) - values) ** 2)
-    print (error)
+    #print (error)
 
-    coefs = np.zeros((radius*2 + 1, radius*2 + 1))
-    coefs[mask] = model.coef_
-    coefs[mask[::-1,::-1]] = model.coef_[::-1]
+    #coefs = np.zeros((radius*2 + 1, radius*2 + 1))
+    #coefs[mask] = model.coef_
+    #coefs[mask[::-1,::-1]] = model.coef_[::-1]
 
-    #coefs = np.concatenate([model.coef_, [0], model.coef_[::-1]]).reshape(radius*2 + 1, radius*2 + 1)
+    #fig, axis = plt.subplots()
+    #axis.imshow(coefs)
+    #fig.savefig('plots/eval_stitch_coefs.png')
+
+    return error#, coefs
+
+
+def evaluate_grid_stitching(image, bin_size=100, radius=10, innerradius=2):
+    values = np.zeros((image.shape[0] // bin_size, image.shape[1] // bin_size))
+
+    for x in range(values.shape[0]):
+        for y in range(values.shape[1]):
+            values[x,y] = evaluate_stitching(image[x*bin_size:(x+1)*bin_size,y*bin_size:(y+1)*bin_size],
+                            radius=radius, innerradius=innerradius)
+
+    return values
+
+
+def evaluate_stitching3(image, radius=10):
+    values = np.zeros((radius * 2 + 1, radius * 2 + 1))
+
+    for dx in range(-radius, radius+1):
+        for dy in range(-radius, radius+1):
+            
+            source = np.roll(image, (dx, dy), axis=(0,1))[radius:-radius,radius:-radius].flatten()
+            target = image[radius:-radius,radius:-radius].flatten()
+
+            #weight = np.dot(source, target) / np.dot(source, source)
+            weight = np.linalg.lstsq(source.reshape(-1,1), target)
+            error = np.mean((source - target) ** 2)
+            values[dx+radius,dy+radius] = error
 
     fig, axis = plt.subplots()
-    axis.imshow(coefs)
-    fig.savefig('plots/eval_stitch_coefs.png')
+    heatmap = axis.imshow(values)
+    fig.colorbar(heatmap, ax=axis)
+    fig.savefig('plots/eval_stitch_errs.png')
+
+
+def reverse_kernel(image, kernel):
+    radius = kernel.shape[0] // 2
+
+    result_shape = (image.shape[0] - kernel.shape[0] + 1, image.shape[1] - kernel.shape[1] + 1)
+    eq_mat = np.zeros((result_shape[0] * result_shape[1], result_shape[0] * result_shape[1]))
+    for x in range(result_shape[0]):
+        for y in range(result_shape[1]):
+            pass
 
 evaluate_stitching = evaluate_stitching2
