@@ -78,13 +78,16 @@ class CompositeImage:
     def add_images(self, images, positions=None, boxes=None, scale='pixel'):
         """ Adds images to the composite
 
-            images: np.ndarray shape (N, W, H) or list of N np.ndarrays shape (W, H) or list of strings
+        Args:
+            images (np.ndarray shape (N, W, H) or list of N np.ndarrays shape (W, H) or list of strings):
                 The images that will be stitched together. Can pass a list of
                 paths that will be opened by imageio.v3.imread when needed.
                 Passing paths will require less memory as images are not stored,
                 but will increase computation time.
+        """
+        """
 
-            positions (np.ndarray shape (N, D)):
+            positions (np.ndarray shape (N, D) ):
                 Specifies the extimated positions of each image. The approx values are
                 used to decide which images are overlapping. These values are interpreted
                 using the scale argument, default they are pixel values.
@@ -94,7 +97,7 @@ class CompositeImage:
                 be passed in. The units of the boxes are interpreted the same as image positions,
                 with the scale argument deciding their relation to the scale of pixels.
 
-            scale: 'pixel', 'tile', float, or tuple length D of any previous values
+            scale ('pixel', 'tile', float, or sequence):
                 The scale argument is used to interpret the position values given.
                 'pixel' means the values are pixel values, equivalent to putting 1.
                 'tile' means the values are indices in a tile grid, eg a unit of 1 is
@@ -239,20 +242,20 @@ class CompositeImage:
         in the montage
 
         Args:
-            pairs (sequence of (i,j): optional
+            pairs (sequence of tuples, optional): optional.
                 The indices of image pairs to add constraints to. Defaults to
                 all images that overlap or are adjacent based on the estimated
                 positions that don't already have constraints, see 
-                `CompositeImage.find_unconstraint_pairs` for more info.
+                `CompositeImage.find_unconstrained_pairs` for more info.
                 Important: the pairs given are not checked for overlap, so invalid
                 constraints could be generated if specific indices are passed in.
 
-            return_constraints (bool): default False
+            return_constraints (bool): default False,
                 If true returns constraints instead of adding them to the montage
 
-        Returns (dict or None):
-            if return_constraints is True, a dict of the calculated constraints
-            is returned, otherwise nothing.
+        Returns:
+            dict: if return_constraints is True, a dict of the calculated constraints
+                is returned, otherwise nothing.
         """
         if pairs is None:
             pairs = self.find_unconstrained_pairs()
@@ -295,11 +298,10 @@ class CompositeImage:
 
         Args:
             num_samples (float): optional
-                The number of fake constraints to be generated, defaults to 0.25*len(images)
+                The number of fake constraints to be generated, defaults to 0.25*len(images).
                 In general the more samples the better the estimate, at the expense of speed
 
-            random_state (int):
-                Used as a seed to get reproducible results
+            random_state (int): Used as a seed to get reproducible results
 
         Returns (float):
             threshold for score where all scores lower are likely to be bad constraints
@@ -458,7 +460,7 @@ class CompositeImage:
                 The indices of image pairs to add constraints to. Defaults to
                 all images that overlap or are adjacent based on the estimated
                 positions that don't already have constraints, see 
-                `CompositeImage.find_unconstraint_pairs` for more info.
+                `CompositeImage.find_unconstrained_pairs` for more info.
                 Important: the pairs given are not checked for overlap, so invalid
                 constraints could be generated if specific indices are passed in.
                 Also passing a pair that already has a constraint will overwrite it
