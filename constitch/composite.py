@@ -10,6 +10,7 @@ import imageio.v3 as iio
 import warnings
 
 from .estimate_translation import calculate_offset, score_offset
+from .stage_model import SimpleOffsetModel, GlobalStageModel
 from .. import utils
 
 
@@ -418,9 +419,9 @@ class CompositeImage:
                 Passed to the RANSACRegressor to produce reproducible results
         """
         if filter_outliers:
-            model = model or sklearn.linear_model.RANSACRegressor(random_state=random_state)
+            model = model or sklearn.linear_model.RANSACRegressor(estimator=GlobalStageModel(), random_state=random_state)
         else:
-            model = model or sklearn.linear_model.LinearRegression()
+            model = model or GlobalStageModel()
 
         est_poses = []
         const_poses = []

@@ -9,7 +9,7 @@ import sklearn.base
 
 class ConversionStageModel:
     def __init__(self, model):
-        self.model = model or sklearn.linear_model.LinearRegression()
+        self.model = model or sklearn.linear_model.LinearRegression(fit_intercept=False)
 
     def conversion_func(poses1, poses2):
         raise NotImplementedError
