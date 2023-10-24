@@ -75,7 +75,7 @@ class CompositeImage:
             return iio.improps(image).shape
         return image.shape
 
-    def add_images(self, images, positions, scale='pixel'):
+    def add_images(self, images, positions=None, boxes=None, scale='pixel'):
         """ Adds images to the composite
 
             images: np.ndarray shape (N, W, H) or list of N np.ndarrays shape (W, H) or list of strings
@@ -84,10 +84,15 @@ class CompositeImage:
                 Passing paths will require less memory as images are not stored,
                 but will increase computation time.
 
-            positions: np.ndarray shape (N, D)
+            positions (np.ndarray shape (N, D)):
                 Specifies the extimated positions of each image. The approx values are
                 used to decide which images are overlapping. These values are interpreted
                 using the scale argument, default they are pixel values.
+
+            boxes (sequence of BBox):
+                An alternative to specifying the positions, the full bounding boxes of every image can also
+                be passed in. The units of the boxes are interpreted the same as image positions,
+                with the scale argument deciding their relation to the scale of pixels.
 
             scale: 'pixel', 'tile', float, or tuple length D of any previous values
                 The scale argument is used to interpret the position values given.
@@ -102,6 +107,7 @@ class CompositeImage:
         positions = np.asarray(positions)
         assert len(self.imageshape(images[0])) == 2, "Only 2d images are supported"
         assert len(self.imageshape(images[0])) == positions.shape[1]
+        assert positions is not None or boxes is not None, "Must specify positions or boxes"
 
         n_dims = positions.shape[1]
         self.n_dims = n_dims
@@ -116,11 +122,15 @@ class CompositeImage:
         if np.isscalar(scale):
             scale = np.full(n_dims, scale)
 
-        for i in range(len(images)):
-            self.boxes.append(BBox(
-                positions[i] * scale,
-                positions[i] * scale + np.array(self.imageshape(images[i])) * self.scale
-            ))
+        if boxes is not None:
+            for i in range(len(images)):
+                self.boxes.append(BBox(boxes[i].pos1 * scale, boxes[i].pos2 * scale))
+        elif positions is not None:
+            for i in range(len(images)):
+                self.boxes.append(BBox(
+                    positions[i] * scale,
+                    positions[i] * scale + np.array(self.imageshape(images[i])) * self.scale
+                ))
         
         self.images.extend(images)
 
@@ -130,6 +140,11 @@ class CompositeImage:
                 self.ffts.extend(self.progress(self.executor.map(fft_job, images), total=len(images)))
             else:
                 self.ffts.extend(self.progress(map(fft_job, images), total=len(images)))
+    
+    def image_positions():
+        """ Returns the positions of all images in pixel values
+        """
+        return np.array([box.pos1 for box in self.boxes])
 
     def merge(self, other_composite):
         """ Adds all images and constraints from another montage into this one.
@@ -176,21 +191,34 @@ class CompositeImage:
         """
         self.scale = scale_factor
 
-    def find_pairs(self, needs_overlap=False):
+    def find_pairs(self, overlap_threshold=None, needs_overlap=False):
         """ Finds all pairs of images that overlap, based on the estimated positions
+            
+            Args:
+                overlap_threshold (scalar or ndarray):
+                    Specifies the amount of overlap that is necessary to consider
+                    two images overlapping, in pixels. Defaults to zero, meaning that
+                    images that are overlapping any or next to each other count as a pair.
+                    Can be negative, in which case images that are within said amount
+                    of touching would be overlapping.
+                    Additionally a ndarray with a value for each dimension can be passed.
 
             Returns: np.ndarray shape (N, 2)
                 The sequence of pairs of indices of the images that overlap.
         """
         pairs = []
-        if needs_overlap:
-            for i in range(len(self.images)):
-                for j in range(i+1,len(self.images)):
+        for i in range(len(self.images)):
+            for j in range(i+1,len(self.images)):
+                box1, box2 = self.boxes[i], self.boxes[j]
+                
+                if overlap_threshold:
+                    box1 = BBox(box1.pos1 + overlap_threshold, box1.pos2 - overlap_threshold)
+                    box2 = BBox(box2.pos1 + overlap_threshold, box2.pos2 - overlap_threshold)
+
+                if needs_overlap:
                     if self.boxes[i].overlaps(self.boxes[j]):
                         pairs.append((i,j))
-        else:
-            for i in range(len(self.images)):
-                for j in range(i+1,len(self.images)):
+                else:
                     if self.boxes[i].collides(self.boxes[j]):
                         pairs.append((i,j))
         return np.array(pairs)
@@ -214,7 +242,8 @@ class CompositeImage:
             pairs (sequence of (i,j): optional
                 The indices of image pairs to add constraints to. Defaults to
                 all images that overlap or are adjacent based on the estimated
-                positions that don't already have constraints.
+                positions that don't already have constraints, see 
+                `CompositeImage.find_unconstraint_pairs` for more info.
                 Important: the pairs given are not checked for overlap, so invalid
                 constraints could be generated if specific indices are passed in.
 
@@ -376,6 +405,13 @@ class CompositeImage:
                 Defaults to LinearRegression if filter_outliers is False and
                 RANSACRegressor if filter_outliers is True
 
+            filter_outliers (bool):
+                Whether to use an estimator that identifies outliers and remove these detected
+                outliers. If model is not specified with this set RANSACRegressor is used.
+                It is important to be careful with RANSAC and other outlier filtering models
+                as they can hyperoptimize. It's recommended to use `CompositeImage.filter_constraints`
+                for filtering and enable outlier filtering if problems are encountered.
+
             random_state (int):
                 Passed to the RANSACRegressor to produce reproducible results
         """
@@ -399,7 +435,7 @@ class CompositeImage:
 
         model.fit(est_poses, const_poses)
 
-        self.debug("Estimated stage model with an r2 score of", model.score(est_poses, const_poses))
+        self.debug("Estimated stage model", model, "with an r2 score of", model.score(est_poses, const_poses))
 
         if filter_outliers:
             self.debug('Filtered out', np.sum(~model.inlier_mask_), 'constraints as outliers')
@@ -421,7 +457,8 @@ class CompositeImage:
             pairs (sequence of (i,j)): optional
                 The indices of image pairs to add constraints to. Defaults to
                 all images that overlap or are adjacent based on the estimated
-                positions that don't already have constraints.
+                positions that don't already have constraints, see 
+                `CompositeImage.find_unconstraint_pairs` for more info.
                 Important: the pairs given are not checked for overlap, so invalid
                 constraints could be generated if specific indices are passed in.
                 Also passing a pair that already has a constraint will overwrite it
