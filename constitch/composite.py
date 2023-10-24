@@ -198,8 +198,8 @@ class CompositeImage:
         """ Finds all pairs of images that overlap based on the estimated positions and
         that don't already have a constraint.
 
-            Returns: np.ndarray shape (N, 2)
-                The sequence of pairs of indices of the images that overlap without constraints.
+        Returns (np.ndarray shape (N, 2)):
+            The sequence of pairs of indices of the images that overlap without constraints.
         """
         pairs = self.find_pairs(needs_overlap=needs_overlap)
         mask = [(i,j) not in self.constraints for i,j in pairs]
@@ -209,24 +209,25 @@ class CompositeImage:
         """ Estimates the pairwise translations of images and add thems as constraints
         in the montage
 
-            pairs: sequence of (i,j), optional
+        Args:
+            pairs (sequence of (i,j): optional
                 The indices of image pairs to add constraints to. Defaults to
                 all images that overlap or are adjacent based on the estimated
                 positions that don't already have constraints.
                 Important: the pairs given are not checked for overlap, so invalid
                 constraints could be generated if specific indices are passed in.
 
-            return_constraints: bool default False
+            return_constraints (bool): default False
                 If true returns constraints instead of adding them to the montage
 
-            Returns: dict or None
-                if return_constraints is True, a dict of the calculated constraints
-                is returned, otherwise nothing.
+        Returns (dict or None):
+            if return_constraints is True, a dict of the calculated constraints
+            is returned, otherwise nothing.
         """
         if pairs is None:
             pairs = self.find_unconstrained_pairs()
 
-        constraints = {} if return_constraints else self.constraints
+        constraints = {}
 
         if self.executor is not None:
             futures = []
@@ -247,23 +248,30 @@ class CompositeImage:
                 score, dx, dy = calculate_offset(self.images[index1], self.images[index2])
                 constraints[(index1,index2)] = Constraint(score, dx, dy)
 
+        scores = np.array([const.score for const in constraints.values()])
+        self.debug("Calculated {} constraints, score values: min {} mean {} max {}".format(len(scores), scores.min(), scores.mean(), scores.max()))
+
         if return_constraints:
             return constraints
+        else:
+            self.constraints.update(constraints)
 
     def calc_score_threshold(self, num_samples=None, random_state=12345):
-        """ Estimates a threshold for selecting for constraints with good overlap.
+        """ Estimates a threshold for selecting constraints with good overlap.
+
         Done by calculating random constraints and using a gaussian mixture model
         to distinguish random constraints from real constraints
 
-            num_samples: float, optional
+        Args:
+            num_samples (float): optional
                 The number of fake constraints to be generated, defaults to 0.25*len(images)
                 In general the more samples the better the estimate, at the expense of speed
 
-            random_state: int
+            random_state (int):
                 Used as a seed to get reproducible results
 
-            Returns: float
-                threshold for score where all scores lower are likely to be bad constraints
+        Returns (float):
+            threshold for score where all scores lower are likely to be bad constraints
         """
         num_samples = num_samples or max(len(self.images) // 4, 10)
         rng = np.random.default_rng(random_state)
@@ -334,11 +342,12 @@ class CompositeImage:
     def filter_constraints(self, score_threshold=None, remove_modeled=False):
         """ Removes constraints that don't meet a score threshold
 
-            score_threshold: float, optional
+        Args:
+            score_threshold (float): optional
                 Cutoff value for score filtering, all constraints below are
                 removed. If not specified a threshold is estimated by calc_score_threshold
 
-            remove_modeled: bool
+            remove_modeled (bool):
                 Whether or not constraints that were calculated from the stage model should be
                 removed. Normally these constraints should not be removed because they have
                 mucho lower scores than others, but you still want to include them for tiles
@@ -358,13 +367,14 @@ class CompositeImage:
         """ Estimages a stage model that translates between estimated
         position differences and pairwise alignment differences.
             
-            model: sklearn model instance
+        Args:
+            model (sklearn model instance):
                 Used as the model to estimate the stage model. fit is called on it
                 with the estimated offsets as X and the offset from constraints as y.
                 Defaults to LinearRegression if filter_outliers is False and
                 RANSACRegressor if filter_outliers is True
 
-            random_state: int
+            random_state (int):
                 Passed to the RANSACRegressor to produce reproducible results
         """
         if filter_outliers:
@@ -382,9 +392,16 @@ class CompositeImage:
                 indices.append((i,j))
 
         est_poses, const_poses = np.array(est_poses), np.array(const_poses)
+        print (est_poses)
+        print (const_poses)
+        np.save('tmp_est_poses', est_poses)
+        np.save('tmp_const_poses', const_poses)
         indices = np.array(indices)
 
         model.fit(est_poses, const_poses)
+
+        print (model.estimator_.coef_)
+        print (model.estimator_.intercept_)
 
         if filter_outliers:
             self.debug('Filtered out', np.sum(~model.inlier_mask_), 'constraints as outliers')
@@ -397,7 +414,8 @@ class CompositeImage:
         """ Uses the stored stage model (estimated by estimage_stage_model) to
         fill the specified constraints.
             
-            pairs: sequence of (i,j), optional
+        Args:
+            pairs (sequence of (i,j)): optional
                 The indices of image pairs to add constraints to. Defaults to
                 all images that overlap or are adjacent based on the estimated
                 positions that don't already have constraints.
@@ -405,15 +423,15 @@ class CompositeImage:
                 constraints could be generated if specific indices are passed in.
                 Also passing a pair that already has a constraint will overwrite it
 
-            score_multiplier: float
+            score_multiplier (float):
                 multiplier to scores of constraints calculated. Used to prioritize
                 non modeled constraints when solving positions
 
-            return_constraints: bool
+            return_constraints (bool):
                 whether to store constraints in self.constraints or to return them
                 as a new dictionary.
 
-            Returns: dict or None
+            Returns (dict or None)
                 Returns a dictionary of the calculated constraints if return_constraints
                 is True, otherwise nothing.
         """
@@ -424,7 +442,9 @@ class CompositeImage:
 
         start_size = len(constraints)
         for i,j in pairs:
+            print ((self.boxes[j].pos1 - self.boxes[i].pos1).reshape(1,-1))
             dx, dy = self.stage_model.predict((self.boxes[j].pos1 - self.boxes[i].pos1).reshape(1,-1)).flatten().astype(int)
+            print (dx, dy)
             score = score_offset(self.images[i], self.images[j], dx, dy) * score_multiplier
             constraints[(i,j)] = Constraint(score, dx, dy, modeled=True)
 
@@ -435,13 +455,15 @@ class CompositeImage:
 
     def solve_constraints(self, apply_positions=True):
         """ Solves all contained constraints to get absolute image positions.
+
         This is done by constructing a set of linear equations, with every constraint
         being an equation of the positions of the two images.
         Scores are incorporated by multiplying the whole equation by the score value,
         as the solution with the least squared error is found, prioritizing solution
         that use highly scored constraints.
 
-            apply_positions: bool
+        Args:
+            apply_positions: (bool)
                 Whether the solved positions should be applied to the images in the composite.
                 If True the current image positions are overwritten.
 
