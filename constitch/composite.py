@@ -125,6 +125,7 @@ class CompositeImage:
         self.images.extend(images)
 
         if self.precalculate_fft:
+            self.debug("Precalculating ffts of", len(images), "images")
             if self.executor is not None:
                 self.ffts.extend(self.progress(self.executor.map(fft_job, images), total=len(images)))
             else:
@@ -205,7 +206,7 @@ class CompositeImage:
         mask = [(i,j) not in self.constraints for i,j in pairs]
         return pairs[mask]
 
-    def calc_constraints(self, pairs=None, return_constraints=False):
+    def calc_constraints(self, pairs=None, return_constraints=False, debug=True):
         """ Estimates the pairwise translations of images and add thems as constraints
         in the montage
 
@@ -248,8 +249,9 @@ class CompositeImage:
                 score, dx, dy = calculate_offset(self.images[index1], self.images[index2])
                 constraints[(index1,index2)] = Constraint(score, dx, dy)
 
-        scores = np.array([const.score for const in constraints.values()])
-        self.debug("Calculated {} constraints, score values: min {} mean {} max {}".format(len(scores), scores.min(), scores.mean(), scores.max()))
+        if debug:
+            scores = np.array([const.score for const in constraints.values()])
+            self.debug("Calculated {} constraints, score values: min {} mean {} max {}".format(len(scores), scores.min(), scores.mean(), scores.max()))
 
         if return_constraints:
             return constraints
@@ -289,7 +291,7 @@ class CompositeImage:
                 if len(fake_pairs) == len(real_consts): break
             if len(fake_pairs) == len(real_consts): break
 
-        fake_consts = self.calc_constraints(fake_pairs, return_constraints=True).values()
+        fake_consts = self.calc_constraints(fake_pairs, return_constraints=True, debug=False).values()
         scores = np.array([const.score for const in real_consts] + [const.score for const in fake_consts])
 
         #fig, axis = plt.subplots()
@@ -387,26 +389,27 @@ class CompositeImage:
         indices = []
         for (i,j), constraint in self.constraints.items():
             if not constraint.modeled:
-                est_poses.append(self.boxes[j].pos1 - self.boxes[i].pos1)
+                #est_poses.append(self.boxes[j].pos1 - self.boxes[i].pos1)
+                est_poses.append(np.concatenate([self.boxes[i].pos1, self.boxes[j].pos1]))
                 const_poses.append((constraint.dx, constraint.dy))
                 indices.append((i,j))
 
         est_poses, const_poses = np.array(est_poses), np.array(const_poses)
-        print (est_poses)
-        print (const_poses)
-        np.save('tmp_est_poses', est_poses)
-        np.save('tmp_const_poses', const_poses)
         indices = np.array(indices)
 
         model.fit(est_poses, const_poses)
 
-        print (model.estimator_.coef_)
-        print (model.estimator_.intercept_)
+        self.debug("Estimated stage model with an r2 score of", model.score(est_poses, const_poses))
 
         if filter_outliers:
             self.debug('Filtered out', np.sum(~model.inlier_mask_), 'constraints as outliers')
             for (i,j) in indices[~model.inlier_mask_]:
                 del self.constraints[(i,j)]
+
+        if (model.predict([[0] * est_poses.shape[1]]).max() > const_poses.max() * 100 or 
+                model.predict([[1] * est_poses.shape[1]]).max() > const_poses.max() * 100):
+            warnings.warn("Stage model is predicting very large values for simple constraints,"
+                " it may have hyperoptimized to the training data.")
 
         self.stage_model = model
 
@@ -442,9 +445,11 @@ class CompositeImage:
 
         start_size = len(constraints)
         for i,j in pairs:
-            print ((self.boxes[j].pos1 - self.boxes[i].pos1).reshape(1,-1))
-            dx, dy = self.stage_model.predict((self.boxes[j].pos1 - self.boxes[i].pos1).reshape(1,-1)).flatten().astype(int)
-            print (dx, dy)
+            dx, dy = self.stage_model.predict(np.array([self.boxes[i].pos1, self.boxes[j].pos1]).reshape(1,-1)).flatten().astype(int)
+            #dx, dy = self.stage_model.predict((self.boxes[j].pos1 - self.boxes[i].pos1).reshape(1,-1)).flatten().astype(int)
+            assert (max(abs(dx), abs(dy)) <= max(self.images[i].shape[0], self.images[j].shape[1])), (
+                "Image offset from stage model does not contain any overlap."
+                " The stage model may not have correctly modeled the movement")
             score = score_offset(self.images[i], self.images[j], dx, dy) * score_multiplier
             constraints[(i,j)] = Constraint(score, dx, dy, modeled=True)
 
