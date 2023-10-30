@@ -419,7 +419,7 @@ class CompositeImage:
         if filter_outliers:
             model = model or sklearn.linear_model.RANSACRegressor(estimator=GlobalStageModel(), random_state=random_state)
         else:
-            model = model or GlobalStageModel()
+            model = model or SimpleOffsetModel()
 
         est_poses = []
         const_poses = []
@@ -496,6 +496,21 @@ class CompositeImage:
         if return_constraints:
             return constraints
 
+    def score_positions(self, pairs=None):
+        """ Scores the current position of images using the normalized cross correlation of each overlapping
+        image
+        """
+
+        if pairs is None:
+            pairs = self.find_pairs()
+
+        scores = []
+        for i,j in pairs:
+            posdiff = self.boxes[j].pos1 - self.boxes[i].pos1
+            scores.append(score_offset(self.images[i], self.images[j], posdiff[0], posdiff[1]))
+
+        return np.array(scores)
+
     def solve_constraints(self, apply_positions=True):
         """ Solves all contained constraints to get absolute image positions.
 
@@ -536,6 +551,15 @@ class CompositeImage:
 
         poses = np.round(solution.reshape(-1,2)).astype(int)
         poses -= poses.min(axis=0).reshape(1,2)
+
+        diffs = []
+        for index, ((id1, id2), constraint) in enumerate(self.constraints.items()):
+            new_offset = poses[id2] - poses[id1]
+            diffs.append((new_offset[0] - constraint.dx, new_offset[1] - constraint.dy))
+
+        diffs = np.abs(np.array(diffs))
+
+        self.debug("Solved", len(self.constraints), "constraints, with error: min {} mean {} max {}".format(diffs.min(), diffs.mean(), diffs.max()))
 
         if apply_positions:
             for i, box in enumerate(self.boxes):
