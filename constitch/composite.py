@@ -85,8 +85,6 @@ class CompositeImage:
                 paths that will be opened by imageio.v3.imread when needed.
                 Passing paths will require less memory as images are not stored,
                 but will increase computation time.
-        """
-        """
 
             positions (np.ndarray shape (N, D) ):
                 Specifies the extimated positions of each image. The approx values are
@@ -191,7 +189,7 @@ class CompositeImage:
             scale_factor: float or int
                 Scale of images in this composite, as a multiplier. Eg a scale_factor of
                 10 will result in each pixel in images corresponding to 10 pixels in the
-                output of functions like stitch_images or when merging composites together.
+                output of functions like `CompositeImage.stitch_images` or when merging composites together.
         """
         self.scale = scale_factor
 
@@ -567,7 +565,7 @@ class CompositeImage:
             keep_zero: bool
                 Whether or not to keep the origin in the result. If true this could
                 result in extra blank space, which might be necessary when lining up
-                multiple images. Otherwise the min of the positions is subtracted
+                multiple images.
 
             Returns: np.ndarray
                 image stitched together
@@ -592,13 +590,6 @@ class CompositeImage:
         full_shape = tuple((maxes - mins) * self.scale) + example_image.shape[2:]
         full_image = np.zeros(full_shape, dtype=example_image.dtype)
         counts = np.zeros(full_shape[:2] + (1,) * (len(full_shape)-2), dtype=np.uint8)
-
-        if np.issubdtype(example_image.dtype, int):
-            div = lambda x,y: x // y
-            castdtype = int
-        else:
-            div = lambda x,y: x / y
-            castdtype = example_image.dtype
 
         for i in indices:
             pos1 = ((self.boxes[i].pos1 - mins) * self.scale).astype(int)
