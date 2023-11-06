@@ -11,6 +11,7 @@ import warnings
 
 from .estimate_translation import calculate_offset, score_offset
 from .stage_model import SimpleOffsetModel, GlobalStageModel
+from . import merging
 from .. import utils
 
 
@@ -417,7 +418,7 @@ class CompositeImage:
                 Passed to the RANSACRegressor to produce reproducible results
         """
         if filter_outliers:
-            model = model or sklearn.linear_model.RANSACRegressor(estimator=GlobalStageModel(), random_state=random_state)
+            model = model or sklearn.linear_model.RANSACRegressor(estimator=SimpleOffsetModel(), random_state=random_state)
         else:
             model = model or SimpleOffsetModel()
 
@@ -568,7 +569,8 @@ class CompositeImage:
         return poses
 
 
-    def stitch_images(self, indices=None, real_images=None, bg_value=None, return_bg_mask=False, keep_zero=False):
+    def stitch_images(self, indices=None, real_images=None, bg_value=None, return_bg_mask=False,
+            keep_zero=False, merger=merging.MeanMerger):
         """ Combines images in the composite into a single image
             
             indices: sequence of int
@@ -612,8 +614,9 @@ class CompositeImage:
 
         example_image = self.imagearr(real_images[0])
         full_shape = tuple((maxes - mins) * self.scale) + example_image.shape[2:]
-        full_image = np.zeros(full_shape, dtype=example_image.dtype)
-        counts = np.zeros(full_shape[:2] + (1,) * (len(full_shape)-2), dtype=np.uint8)
+        merger = merger(full_shape, example_image.dtype)
+        #full_image = np.zeros(full_shape, dtype=example_image.dtype)
+        #counts = np.zeros(full_shape[:2] + (1,) * (len(full_shape)-2), dtype=np.uint8)
 
         for i in indices:
             pos1 = ((self.boxes[i].pos1 - mins) * self.scale).astype(int)
@@ -623,19 +626,23 @@ class CompositeImage:
                 warnings.warn("resizing some images")
                 image = skimage.transform.resize(image, pos2 - pos1)
 
-            image_counts = counts[pos1[0]:pos2[0],pos1[1]:pos2[1]]
-            cur_image = full_image[pos1[0]:pos2[0],pos1[1]:pos2[1]] 
-            if np.issubdtype(example_image.dtype, np.integer):
-                cur_image[...] = (cur_image.astype(int) * image_counts + image) // (image_counts + 1)
-            else:
-                cur_image[...] = (cur_image * image_counts + image) / (image_counts + 1)
-            image_counts += 1
+            position = (slice(pos1[0], pos2[0]), slice(pos1[1], pos2[1]))
+            merger.add_image(image, position)
+            #image_counts = counts[pos1[0]:pos2[0],pos1[1]:pos2[1]]
+            #cur_image = full_image[pos1[0]:pos2[0],pos1[1]:pos2[1]] 
+            #if np.issubdtype(example_image.dtype, np.integer):
+                #cur_image[...] = (cur_image.astype(int) * image_counts + image) // (image_counts + 1)
+            #else:
+                #cur_image[...] = (cur_image * image_counts + image) / (image_counts + 1)
+            #image_counts += 1
+
+        full_image, mask = merger.final_image()
 
         if bg_value is not None:
-            full_image[counts!=0] = bg_value
+            full_image[mask] = bg_value
         
         if return_bg_mask:
-            return full_image, counts!=0
+            return full_image, mask
         return full_image
 
 def fft_job(image):
