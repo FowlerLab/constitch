@@ -30,7 +30,7 @@ class Merger:
 class MeanMerger:
     def __init__(self, image_shape, image_dtype):
         self.image = np.zeros(image_shape, self.promote_dtype(image_dtype))
-        self.counts = np.zeros(image_shape[:2] + (1,) * (len(image_shape)-2), dtype=np.uint8)
+        self.counts = np.zeros(image_shape[:2], dtype=np.uint8)
         self.og_dtype = image_dtype
 
     def promote_dtype(self, dtype):
@@ -55,9 +55,9 @@ class MeanMerger:
     def final_image(self):
         mask = self.counts != 0
         if np.issubdtype(self.image.dtype, np.integer):
-            self.image[mask] //= self.counts[mask]
+            self.image[mask] //= self.counts[mask].reshape(self.image.shape[:2] + (1,) * len(self.image.shape-2))
         else:
-            self.image[mask] /= self.counts[mask]
+            self.image[mask] /= self.counts[mask].reshape(self.image.shape[:2] + (1,) * len(self.image.shape-2))
         return self.image.astype(self.og_dtype), self.counts != 0
 
 
