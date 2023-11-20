@@ -1,4 +1,5 @@
 import collections
+import pickle
 import math
 import dataclasses
 import numpy as np
@@ -66,6 +67,35 @@ class CompositeImage:
             self.debug("Using {} bytes ({}) for ffts".format(mem_ffts, utils.human_readable(mem_ffts)))
             mem_images += mem_ffts
         self.debug("Total: {} ({})".format(mem_images, utils.human_readable(mem_images)))
+
+    def save(self, path, save_images=True):
+        obj = dict(
+            boxes = self.boxes,
+            constraints = self.constraints,
+            scale = self.scale,
+            stage_model = self.stage_model,
+            debug = bool(self.debug),
+            progress = bool(self.progress),
+            precalculate_fft = self.precalculate_fft,
+        )
+        if save_images: obj['images'] = self.images
+
+        with open(path, 'wb') as ofile:
+            pickle.dump(obj, ofile)
+
+    @classmethod
+    def load(cls, path, **kwargs):
+        obj = pickle.load(open(path, 'rb'))
+        params = dict(
+            precalculate_fft = obj.pop('precalculate_fft'),
+            #debug = obj.pop('debug'),
+            #progress = obj.pop('progress'),
+        )
+        params.update(kwargs)
+
+        composite = cls(**params)
+        composite.__dict__.update(obj)
+        return composite
     
     def imagearr(self, image):
         if type(image) == str:
@@ -281,7 +311,7 @@ class CompositeImage:
                 score, dx, dy = calculate_offset(self.images[index1], self.images[index2])
                 constraints[(index1,index2)] = Constraint(score, dx, dy)
 
-        if debug:
+        if debug and len(constraints) != 0:
             scores = np.array([const.score for const in constraints.values()])
             self.debug("Calculated {} constraints, score values: min {} mean {} max {}".format(len(scores), scores.min(), scores.mean(), scores.max()))
 
@@ -615,8 +645,6 @@ class CompositeImage:
         example_image = self.imagearr(real_images[0])
         full_shape = tuple((maxes - mins) * self.scale) + example_image.shape[2:]
         merger = merger(full_shape, example_image.dtype)
-        #full_image = np.zeros(full_shape, dtype=example_image.dtype)
-        #counts = np.zeros(full_shape[:2] + (1,) * (len(full_shape)-2), dtype=np.uint8)
 
         for i in indices:
             pos1 = ((self.boxes[i].pos1 - mins) * self.scale).astype(int)
@@ -628,13 +656,6 @@ class CompositeImage:
 
             position = (slice(pos1[0], pos2[0]), slice(pos1[1], pos2[1]))
             merger.add_image(image, position)
-            #image_counts = counts[pos1[0]:pos2[0],pos1[1]:pos2[1]]
-            #cur_image = full_image[pos1[0]:pos2[0],pos1[1]:pos2[1]] 
-            #if np.issubdtype(example_image.dtype, np.integer):
-                #cur_image[...] = (cur_image.astype(int) * image_counts + image) // (image_counts + 1)
-            #else:
-                #cur_image[...] = (cur_image * image_counts + image) / (image_counts + 1)
-            #image_counts += 1
 
         full_image, mask = merger.final_image()
 
@@ -644,6 +665,37 @@ class CompositeImage:
         if return_bg_mask:
             return full_image, mask
         return full_image
+
+
+    def plot_scores(self, path):
+        import matplotlib.pyplot as plt
+
+        fig, axis = plt.subplots(figsize=(15,15))
+
+        for i in range(len(self.boxes)):
+            axis.text(*self.boxes[i].pos1, str(i), horizontalalignment='center', verticalalignment='center')
+
+        poses = []
+        colors = []
+        sizes = []
+        for (i,j), constraint in self.constraints.items():
+            pos1, pos2 = self.boxes[i].pos1[:2], self.boxes[j].pos1[:2]
+            if np.all(pos1 == pos2):
+                print (i, j, constraint)
+            pos = np.mean((pos1, pos2), axis=0)
+            poses.append((pos[1], pos[0]))
+            colors.append(constraint.score)
+            sizes.append(2 if constraint.modeled else 5)
+            #axis.plot((pos1[0], pos2[0]), (pos1[1], pos2[1]), linewidth=1, color='red' if constraint.modeled else 'black')
+        poses = np.array(poses)
+
+        points = axis.scatter(poses[:,0], poses[:,1], c=colors)
+        fig.colorbar(points, ax=axis)
+
+        axis.set_title('Scores of constraints (red = calculated)')
+
+        fig.savefig(path)
+
 
 def fft_job(image):
     if type(image) == str:

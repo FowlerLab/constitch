@@ -55,9 +55,9 @@ class MeanMerger:
     def final_image(self):
         mask = self.counts != 0
         if np.issubdtype(self.image.dtype, np.integer):
-            self.image[mask] //= self.counts[mask].reshape(self.image.shape[:2] + (1,) * len(self.image.shape-2))
+            self.image[mask] //= self.counts.reshape(self.image.shape[:2] + (1,) * (len(self.image.shape)-2))[mask]
         else:
-            self.image[mask] /= self.counts[mask].reshape(self.image.shape[:2] + (1,) * len(self.image.shape-2))
+            self.image[mask] /= self.counts.reshape(self.image.shape[:2] + (1,) * (len(self.image.shape)-2))[mask]
         return self.image.astype(self.og_dtype), self.counts != 0
 
 

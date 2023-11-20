@@ -11,15 +11,20 @@ def pcm(image1, image2):
     assert np.array_equal(image1.shape, image2.shape)
     F1 = np.fft.fft2(image1)
     F2 = np.fft.fft2(image2)
-    FC = F1 * np.conjugate(F2)
+    F1 *= np.conjugate(F2)
+    FC = F1
     del F1, F2
-    return np.fft.ifft2(FC / np.abs(FC)).real.astype(np.float32)
+    FC /= np.abs(FC)
+    FC = np.fft.ifft2(FC)
+    return FC.real.astype(np.float32)
 
 def pcm_fft(F1, F2):
     """Compute peak correlation matrix for two images, with the fft already applied
     """
     FC = F1 * np.conjugate(F2)
-    return np.fft.ifft2(FC / np.abs(FC)).real.astype(np.float32)
+    FC /= np.abs(FC)
+    FC = np.fft.ifft2(FC)
+    return FC.real.astype(np.float32)
 
 def multi_peak_max(PCM):
     """Find the first to n th largest peaks in PCM.
@@ -76,7 +81,8 @@ def extract_overlap_subregion(image, y, x):
     return image[xstart:xend, ystart:yend]
 
 
-def interpret_translation(image1, image2, yins, xins, ymin, ymax, xmin, xmax, n = 2):
+def interpret_translation(image1, image2, yins, xins, ymin, ymax, xmin, xmax,
+            num_peaks=2, max_peaks=None, ncc_threshold=None):
     """Interpret the translation to find the translation with heighest ncc.
         the first image (the dimension must be 2)
     yins : IntArray
@@ -91,8 +97,17 @@ def interpret_translation(image1, image2, yins, xins, ymin, ymax, xmin, xmax, n 
         the minimum value of x (last dim.)
     xmax : Int
         the maximum value of x (last dim.)
-    n : Int
-        the number of peaks to check, default is 2.
+    num_peaks : Int
+        the number of peaks to check
+    max_peaks : Int
+        a limit on the number of peaks to check, only used
+        if ncc_threshold is declared.
+    ncc_threshold : Float
+        a threshold of the score of offsets (the ncc) that is needed to
+        return an offset. If this is specified and after checking
+        num_peaks peaks the highest score found is below this value,
+        it will continue checking more peaks until the score is above
+        the value or max_peaks is reached.
 
     Returns
     -------
@@ -110,6 +125,9 @@ def interpret_translation(image1, image2, yins, xins, ymin, ymax, xmin, xmax, n 
     sizeX = image1.shape[1]
     assert np.all(0 <= yins) and np.all(yins < sizeY)
     assert np.all(0 <= xins) and np.all(xins < sizeX)
+
+    max_peaks = max_peaks or num_peaks
+    ncc_threshold = ncc_threshold or 0
 
     _ncc = -np.infty
     y = 0
@@ -138,7 +156,7 @@ def interpret_translation(image1, image2, yins, xins, ymin, ymax, xmin, xmax, n 
     )
     assert np.any(valid_ind)
     valid_ind = np.any(valid_ind, axis=0)
-    for pos in np.moveaxis(poss[:, :, valid_ind], -1, 0)[: int(n)]:
+    for peakindex, pos in enumerate(np.moveaxis(poss[:, :, valid_ind], -1, 0)):
         for yval, xval in pos:
             if (ymin <= yval) and (yval <= ymax) and (xmin <= xval) and (xval <= xmax):
                 subI1 = extract_overlap_subregion(image1, yval, xval)
@@ -149,26 +167,38 @@ def interpret_translation(image1, image2, yins, xins, ymin, ymax, xmin, xmax, n 
                     _ncc = float(ncc_val)
                     y = int(yval)
                     x = int(xval)
+
+        if peakindex+1 >= num_peaks and (peakindex+1 >= max_peaks or _ncc >= ncc_threshold):
+            break
     return _ncc, y, x
 
 
 
+def pcm_diff_sizes(image1, image2):
+    new_shape = max(image1.shape[0], image2.shape[0]), max(image1.shape[1], image2.shape[1])
+    if image1.shape != new_shape:
+        newimg = np.zeros
 
 
-def calculate_offset(image1, image2, fft1=None, fft2=None):
+
+def calculate_offset(image1, image2, fft1=None, fft2=None, num_peaks=2, max_peaks=5, score_threshold=0.1):
     if type(image1) == str:
         image1 = skimage.io.imread(image1)
     if type(image2) == str:
         image2 = skimage.io.imread(image2)
 
     sizeY, sizeX = max(image1.shape[0], image2.shape[0]), max(image1.shape[1], image2.shape[1])
+
+    if image1.shape != image2.shape:
+        PCM = pcm_diff_sizes(image1, image2)
     if fft1 is None or fft2 is None:
         PCM = pcm(image1, image2).real
     else:
         PCM = pcm_fft(fft1, fft2).real
     yins, xins, _ = multi_peak_max(PCM)
     del PCM
-    max_peak = interpret_translation(image1, image2, yins, xins, -sizeY, sizeY, -sizeX, sizeX)
+    max_peak = interpret_translation(image1, image2, yins, xins, -sizeY, sizeY, -sizeX, sizeX,
+                    num_peaks=num_peaks, max_peaks=max_peaks, ncc_threshold=score_threshold)
     return max_peak
 
 def score_offset(image1, image2, dx, dy):
