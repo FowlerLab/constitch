@@ -46,8 +46,8 @@ def ncc(image1, image2):
     assert image1.ndim == 2
     assert image2.ndim == 2
     assert np.array_equal(image1.shape, image2.shape)
-    image1 = image1.flatten()
-    image2 = image2.flatten()
+    image1 = image1.reshape(-1)
+    image2 = image2.reshape(-1)
     n = np.dot(image1 - np.mean(image1), image2 - np.mean(image2))
     d = np.linalg.norm(image1) * np.linalg.norm(image2)
     return n / d
@@ -155,7 +155,11 @@ def interpret_translation(image1, image2, yins, xins, ymin, ymax, xmin, xmax,
         & (poss[:, 1, :] <= xmax)
     )
     assert np.any(valid_ind)
+    print (poss.shape)
+    print (valid_ind.shape)
     valid_ind = np.any(valid_ind, axis=0)
+    print (valid_ind.shape)
+    print (valid_ind[:100])
     for peakindex, pos in enumerate(np.moveaxis(poss[:, :, valid_ind], -1, 0)):
         for yval, xval in pos:
             if (ymin <= yval) and (yval <= ymax) and (xmin <= xval) and (xval <= xmax):
@@ -174,23 +178,40 @@ def interpret_translation(image1, image2, yins, xins, ymin, ymax, xmin, xmax,
 
 
 
-def pcm_diff_sizes(image1, image2):
+def image_diff_sizes(image1, image2):
     new_shape = max(image1.shape[0], image2.shape[0]), max(image1.shape[1], image2.shape[1])
+
     if image1.shape != new_shape:
-        newimg = np.zeros
+        newimg = np.zeros(new_shape, dtype=image1.dtype)
+        newimg[:image1.shape[0],:image1.shape[1]] = image1
+        image1 = newimg
+
+    if image2.shape != new_shape:
+        newimg = np.zeros(new_shape, dtype=image2.dtype)
+        newimg[:image2.shape[0],:image2.shape[1]] = image2
+        image2 = newimg
+
+    return image1, image2
 
 
 
-def calculate_offset(image1, image2, fft1=None, fft2=None, num_peaks=2, max_peaks=5, score_threshold=0.1):
+
+def calculate_offset(image1, image2, shape1=None, shape2=None, fft1=None, fft2=None, num_peaks=2, max_peaks=5, score_threshold=0.1):
     if type(image1) == str:
         image1 = skimage.io.imread(image1)
     if type(image2) == str:
         image2 = skimage.io.imread(image2)
 
-    sizeY, sizeX = max(image1.shape[0], image2.shape[0]), max(image1.shape[1], image2.shape[1])
+    if shape1 is not None and tuple(shape1) != image1.shape:
+        image1 = skimage.transform.resize(image1, shape1)
+    if shape2 is not None and tuple(shape2) != image2.shape:
+        image2 = skimage.transform.resize(image2, shape2)
 
     if image1.shape != image2.shape:
-        PCM = pcm_diff_sizes(image1, image2)
+        image1, image2 = image_diff_sizes(image1, image2)
+
+    sizeY, sizeX = max(image1.shape[0], image2.shape[0]), max(image1.shape[1], image2.shape[1])
+
     if fft1 is None or fft2 is None:
         PCM = pcm(image1, image2).real
     else:

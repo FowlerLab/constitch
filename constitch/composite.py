@@ -41,6 +41,9 @@ class BBox:
                   | ((self.pos1 >= otherbox.pos1) & (self.pos1 < otherbox.pos2)))
         return np.all(contains)
 
+    def size(self):
+        return self.pos2 - self.pos1
+
 
 class CompositeImage:
     def __init__(self, precalculate_fft=False, debug=True, progress=False, executor=None):
@@ -139,7 +142,6 @@ class CompositeImage:
         """
         positions = np.asarray(positions)
         assert len(self.imageshape(images[0])) == 2, "Only 2d images are supported"
-        assert len(self.imageshape(images[0])) == positions.shape[1]
         assert positions is not None or boxes is not None, "Must specify positions or boxes"
 
         n_dims = positions.shape[1]
@@ -160,9 +162,11 @@ class CompositeImage:
                 self.boxes.append(BBox(boxes[i].pos1 * scale, boxes[i].pos2 * scale))
         elif positions is not None:
             for i in range(len(images)):
+                imageshape = np.ones_like(positions[i])
+                imageshape[:2] = np.array(self.imageshape(images[i]))
                 self.boxes.append(BBox(
                     positions[i] * scale,
-                    positions[i] * scale + np.array(self.imageshape(images[i])) * self.scale
+                    positions[i] * scale + imageshape * self.scale
                 ))
         
         self.images.extend(images)
@@ -249,21 +253,21 @@ class CompositeImage:
                     box2 = BBox(box2.pos1 + overlap_threshold, box2.pos2 - overlap_threshold)
 
                 if needs_overlap:
-                    if self.boxes[i].overlaps(self.boxes[j]):
+                    if box1.overlaps(box2):
                         pairs.append((i,j))
                 else:
-                    if self.boxes[i].collides(self.boxes[j]):
+                    if box1.collides(box2):
                         pairs.append((i,j))
         return np.array(pairs)
 
-    def find_unconstrained_pairs(self, needs_overlap=False):
+    def find_unconstrained_pairs(self, overlap_threshold=None, needs_overlap=False):
         """ Finds all pairs of images that overlap based on the estimated positions and
         that don't already have a constraint.
 
         Returns (np.ndarray shape (N, 2)):
             The sequence of pairs of indices of the images that overlap without constraints.
         """
-        pairs = self.find_pairs(needs_overlap=needs_overlap)
+        pairs = self.find_pairs(overlap_threshold=overlap_threshold, needs_overlap=needs_overlap)
         mask = [(i,j) not in self.constraints for i,j in pairs]
         return pairs[mask]
 
@@ -298,17 +302,21 @@ class CompositeImage:
                 for index1, index2 in pairs:
                     futures.append(self.executor.submit(calculate_offset,
                             self.images[index1], self.images[index2],
+                            self.boxes[index1].size()[:2], self.boxes[index2].size()[:2],
                             self.ffts[index1], self.ffts[index2]))
             else:
                 for index1, index2 in pairs:
-                    futures.append(self.executor.submit(calculate_offset, self.images[index1], self.images[index2]))
+                    futures.append(self.executor.submit(calculate_offset,
+                            self.images[index1], self.images[index2],
+                            self.boxes[index1].size()[:2], self.boxes[index2].size()[:2]))
 
             for (index1, index2), future in self.progress(zip(pairs, futures), total=len(futures)):
                 score, dx, dy = future.result()
                 constraints[(index1,index2)] = Constraint(score, dx, dy)
         else:
             for index1, index2 in self.progress(pairs):
-                score, dx, dy = calculate_offset(self.images[index1], self.images[index2])
+                score, dx, dy = calculate_offset(self.images[index1], self.images[index2],
+                        self.boxes[index1].size()[:2], self.boxes[index2].size()[:2])
                 constraints[(index1,index2)] = Constraint(score, dx, dy)
 
         if debug and len(constraints) != 0:
@@ -458,7 +466,7 @@ class CompositeImage:
         for (i,j), constraint in self.constraints.items():
             if not constraint.modeled:
                 #est_poses.append(self.boxes[j].pos1 - self.boxes[i].pos1)
-                est_poses.append(np.concatenate([self.boxes[i].pos1, self.boxes[j].pos1]))
+                est_poses.append(np.concatenate([self.boxes[i].pos1[:2], self.boxes[j].pos1[:2]]))
                 const_poses.append((constraint.dx, constraint.dy))
                 indices.append((i,j))
 
@@ -594,8 +602,8 @@ class CompositeImage:
 
         if apply_positions:
             for i, box in enumerate(self.boxes):
-                box.pos2 = poses[i] + box.pos2 - box.pos1
-                box.pos1 = poses[i]
+                box.pos2[:2] = poses[i] + box.pos2[:2] - box.pos1[:2]
+                box.pos1[:2] = poses[i]
         return poses
 
 
@@ -647,8 +655,8 @@ class CompositeImage:
         merger = merger(full_shape, example_image.dtype)
 
         for i in indices:
-            pos1 = ((self.boxes[i].pos1 - mins) * self.scale).astype(int)
-            pos2 = ((self.boxes[i].pos2 - mins) * self.scale).astype(int)
+            pos1 = ((self.boxes[i].pos1[:2] - mins) * self.scale).astype(int)
+            pos2 = ((self.boxes[i].pos2[:2] - mins) * self.scale).astype(int)
             image = self.imagearr(real_images[i])
             if np.any(pos2 - pos1 != image.shape[:2]):
                 warnings.warn("resizing some images")
