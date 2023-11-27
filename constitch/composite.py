@@ -88,8 +88,8 @@ class CompositeImage:
         obj = pickle.load(open(path, 'rb'))
         params = dict(
             precalculate_fft = obj.pop('precalculate_fft'),
-            #debug = obj.pop('debug'),
-            #progress = obj.pop('progress'),
+            debug = obj.pop('debug'),
+            progress = obj.pop('progress'),
         )
         params.update(kwargs)
 
@@ -354,10 +354,14 @@ class CompositeImage:
 
         fake_consts = self.calc_constraints(fake_pairs, return_constraints=True, debug=False).values()
         scores = np.array([const.score for const in real_consts] + [const.score for const in fake_consts])
+        print(scores.tolist())
+        print (len(real_consts))
 
-        #fig, axis = plt.subplots()
+        fig, axis = plt.subplots()
+        axis.hist(scores[:len(real_consts)], bins=15, alpha=0.5)
+        axis.hist(scores[len(real_consts):], bins=15, alpha=0.5)
         #axis.hist(scores, bins=15)
-        #fig.savefig('plots/ncc_hist.png')
+        fig.savefig('plots/ncc_hist.png')
 
         #thresh = skimage.filters.threshold_otsu(scores)
         mix_model = sklearn.mixture.GaussianMixture(n_components=2, random_state=random_state)
@@ -590,7 +594,8 @@ class CompositeImage:
 
         diffs = np.abs(np.array(diffs))
 
-        self.debug("Solved", len(self.constraints), "constraints, with error: min {} mean {} max {}".format(diffs.min(), diffs.mean(), diffs.max()))
+        self.debug("Solved", len(self.constraints), "constraints, with error: min {} max".format(
+                np.percentile(diffs, (0,1,50,99,100))))
 
         if apply_positions:
             for i, box in enumerate(self.boxes):
@@ -673,23 +678,28 @@ class CompositeImage:
         fig, axis = plt.subplots(figsize=(15,15))
 
         for i in range(len(self.boxes)):
-            axis.text(*self.boxes[i].pos1, str(i), horizontalalignment='center', verticalalignment='center')
+            x, y = self.boxes[i].pos1[:2]
+            axis.text(y, -x, str(i), horizontalalignment='center', verticalalignment='center')
 
         poses = []
         colors = []
         sizes = []
         for (i,j), constraint in self.constraints.items():
             pos1, pos2 = self.boxes[i].pos1[:2], self.boxes[j].pos1[:2]
+            if i == 0 or j == 0:
+                print (i, j)
+                print (pos1, pos2, np.mean((pos1, pos2), axis=0))
             if np.all(pos1 == pos2):
                 print (i, j, constraint)
             pos = np.mean((pos1, pos2), axis=0)
-            poses.append((pos[1], pos[0]))
+            poses.append((pos[1], -pos[0]))
             colors.append(constraint.score)
-            sizes.append(2 if constraint.modeled else 5)
+            sizes.append(50 if constraint.modeled else 200)
+            axis.arrow(pos[1] - constraint.dy/4, -pos[0] + constraint.dx/4, constraint.dy/2, -constraint.dx/2, color='black')
             #axis.plot((pos1[0], pos2[0]), (pos1[1], pos2[1]), linewidth=1, color='red' if constraint.modeled else 'black')
         poses = np.array(poses)
 
-        points = axis.scatter(poses[:,0], poses[:,1], c=colors)
+        points = axis.scatter(poses[:,0], poses[:,1], c=colors, s=sizes)
         fig.colorbar(points, ax=axis)
 
         axis.set_title('Scores of constraints (red = calculated)')
