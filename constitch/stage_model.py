@@ -7,35 +7,38 @@ import sklearn.linear_model
 import sklearn.mixture
 import sklearn.base
 
-class ConversionStageModel:
+class ConversionStageModel(sklearn.base.BaseEstimator):
     def __init__(self, model=None):
         self.model = model or sklearn.linear_model.LinearRegression(fit_intercept=False)
 
     def conversion_func(self, poses1, poses2):
         raise NotImplementedError
 
+    def split_X(self,X):
+        return X[:,:X.shape[1]//2], X[:,X.shape[1]//2:]
+
     def fit(self, X, y):
         X = np.asarray(X)
-        X = self.conversion_func(X[:,:2], X[:,2:])
+        X = self.conversion_func(*self.split_X(X))
         return self.model.fit(X, y)
 
     def predict(self, X):
         X = np.asarray(X)
-        X = self.conversion_func(X[:,:2], X[:,2:])
+        X = self.conversion_func(*self.split_X(X))
         return self.model.predict(X)
 
     def fit_predict(self, X, y):
         X = np.asarray(X)
-        X = self.conversion_func(X[:,:2], X[:,2:])
+        X = self.conversion_func(*self.split_X(X))
         return self.model.fit_predict(X, y)
 
     def score(self, X, y):
         X = np.asarray(X)
-        X = self.conversion_func(X[:,:2], X[:,2:])
+        X = self.conversion_func(*self.split_X(X))
         return self.model.score(X, y)
 
-    def __getattr__(self, attr):
-        return self.model.__getattr__(attr)
+    #def __getattr__(self, attr):
+        #return getattr(self.model, attr)
 
     def __repr__(self):
         return type(self).__name__ + "(model={})".format(repr(self.model))

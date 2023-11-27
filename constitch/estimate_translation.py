@@ -155,11 +155,11 @@ def interpret_translation(image1, image2, yins, xins, ymin, ymax, xmin, xmax,
         & (poss[:, 1, :] <= xmax)
     )
     assert np.any(valid_ind)
-    print (poss.shape)
-    print (valid_ind.shape)
+    #print (poss.shape)
+    #print (valid_ind.shape)
     valid_ind = np.any(valid_ind, axis=0)
-    print (valid_ind.shape)
-    print (valid_ind[:100])
+    #print (valid_ind.shape)
+    #print (valid_ind[:100])
     for peakindex, pos in enumerate(np.moveaxis(poss[:, :, valid_ind], -1, 0)):
         for yval, xval in pos:
             if (ymin <= yval) and (yval <= ymax) and (xmin <= xval) and (xval <= xmax):

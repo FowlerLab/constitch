@@ -45,10 +45,20 @@ class BBox:
         return self.pos2 - self.pos1
 
 
+class BBoxList(list):
+    @property
+    def pos1(self):
+        return np.array([box.pos1 for box in self])
+
+    @property
+    def pos2(self):
+        return np.array([box.pos2 for box in self])
+
+
 class CompositeImage:
     def __init__(self, precalculate_fft=False, debug=True, progress=False, executor=None):
         self.images = []
-        self.boxes = []
+        self.boxes = BBoxList()
         self.constraints = {}
         self.scale = 1
         self.stage_model = None
@@ -216,6 +226,37 @@ class CompositeImage:
 
         return list(range(start_index, len(self.images)))
 
+    def subcomposite(self, indices):
+        """ Returns a new composite with a subset of the images and constraints in this one.
+        The images and positions are shared, so modifing them on the new composite will
+        change them on the original.
+
+            indices: sequence of ints, sequence of bools, function
+                A way to select the images to be included in the new composite. Can be:
+                a sequence of indices, a sequence of boolean values the same length as images,
+        """
+        
+        if type(indices[0]) == bool:
+            indices = [i for i in range(len(indices)) if indices[i]]
+
+        composite = type(self)(
+            precalculate_fft = self.precalculate_fft,
+            executor = self.executor,
+            debug = self.debug,
+            progress = self.progress,
+        )
+
+        composite.images = [self.images[i] for i in indices]
+        composite.boxes = [self.boxes[i] for i in indices]
+        if self.precalculate_fft:
+            composite.ffts = [self.ffts[i] for i in indices]
+
+        for (i,j), constraint in self.constraints.items():
+            if i in indices and j in indices:
+                composite.constraints[(indices.index(i), indices.index(j))] = constraint
+
+        return composite
+
     def set_scale(self, scale_factor):
         """ Sets the scale factor of the composite. Normally this doesn't need to be changed,
         however if you are trying to stich together images taken at different magnifications you
@@ -353,8 +394,8 @@ class CompositeImage:
         for i in rng.permutation(len(self.images)):
             for j in rng.permutation(len(self.images)):
                 if ((i,j) not in self.constraints
-                        and np.any(np.abs(self.boxes[i].pos1 - self.boxes[j].pos1)
-                            > np.abs(self.boxes[i].pos2 - self.boxes[i].pos1) * 1.5)):
+                        and np.any(np.abs(self.boxes[i].pos1[:2] - self.boxes[j].pos1[:2])
+                            > np.abs(self.boxes[i].pos2[:2] - self.boxes[i].pos1[:2]) * 1.5)):
                     fake_pairs.append((i,j))
 
                 if len(fake_pairs) == len(real_consts): break
@@ -362,8 +403,6 @@ class CompositeImage:
 
         fake_consts = self.calc_constraints(fake_pairs, return_constraints=True, debug=False).values()
         scores = np.array([const.score for const in real_consts] + [const.score for const in fake_consts])
-        print(scores.tolist())
-        print (len(real_consts))
 
         fig, axis = plt.subplots()
         axis.hist(scores[:len(real_consts)], bins=15, alpha=0.5)
@@ -446,23 +485,14 @@ class CompositeImage:
             model (sklearn model instance):
                 Used as the model to estimate the stage model. fit is called on it
                 with the estimated offsets as X and the offset from constraints as y.
-                Defaults to LinearRegression if filter_outliers is False and
-                RANSACRegressor if filter_outliers is True
-
-            filter_outliers (bool):
-                Whether to use an estimator that identifies outliers and remove these detected
-                outliers. If model is not specified with this set RANSACRegressor is used.
-                It is important to be careful with RANSAC and other outlier filtering models
-                as they can hyperoptimize. It's recommended to use `CompositeImage.filter_constraints`
-                for filtering and enable outlier filtering if problems are encountered.
-
-            random_state (int):
-                Passed to the RANSACRegressor to produce reproducible results
+                Defaults to LinearRegression
         """
+        model = model or SimpleOffsetModel()
         if filter_outliers:
-            model = model or sklearn.linear_model.RANSACRegressor(estimator=SimpleOffsetModel(), random_state=random_state)
-        else:
-            model = model or SimpleOffsetModel()
+            model = sklearn.linear_model.RANSACRegressor(model,
+                    min_samples=self.boxes[0].pos1.shape[0]*2,
+                    max_trials=1000,
+                    random_state=random_state)
 
         est_poses = []
         const_poses = []
@@ -470,7 +500,7 @@ class CompositeImage:
         for (i,j), constraint in self.constraints.items():
             if not constraint.modeled:
                 #est_poses.append(self.boxes[j].pos1 - self.boxes[i].pos1)
-                est_poses.append(np.concatenate([self.boxes[i].pos1[:2], self.boxes[j].pos1[:2]]))
+                est_poses.append(np.concatenate([self.boxes[i].pos1, self.boxes[j].pos1]))
                 const_poses.append((constraint.dx, constraint.dy))
                 indices.append((i,j))
 
@@ -478,13 +508,28 @@ class CompositeImage:
         indices = np.array(indices)
 
         model.fit(est_poses, const_poses)
-
-        self.debug("Estimated stage model", model, "with an r2 score of", model.score(est_poses, const_poses))
+        #print (model.estimator.model.coef_)
 
         if filter_outliers:
             self.debug('Filtered out', np.sum(~model.inlier_mask_), 'constraints as outliers')
             for (i,j) in indices[~model.inlier_mask_]:
                 del self.constraints[(i,j)]
+            model = model.estimator_
+            """
+            error = model.predict(est_poses) - const_poses
+            print (error.astype(int))
+            error = np.sum(error * error, axis=1)
+            thresh = np.sum((const_poses/3) * (const_poses/3), axis=1).mean()
+            print (error.astype(int))
+            print (thresh)
+            mask = error > thresh
+            if np.any(mask):
+                self.debug('Filtered out', np.sum(mask), 'constraints as outliers')
+                for (i,j) in indices[mask]:
+                    del self.constraints[(i,j)]
+            """
+
+        self.debug("Estimated stage model", model, "with an r2 score of", model.score(est_poses, const_poses))
 
         if (model.predict([[0] * est_poses.shape[1]]).max() > const_poses.max() * 100 or 
                 model.predict([[1] * est_poses.shape[1]]).max() > const_poses.max() * 100):
@@ -492,6 +537,9 @@ class CompositeImage:
                 " it may have hyperoptimized to the training data.")
 
         self.stage_model = model
+
+    def filter_outliers(self):
+        pass
 
     def model_constraints(self, pairs=None, score_multiplier=0.5, return_constraints=False):
         """ Uses the stored stage model (estimated by estimage_stage_model) to
@@ -549,7 +597,7 @@ class CompositeImage:
 
         scores = []
         for i,j in pairs:
-            posdiff = self.boxes[j].pos1 - self.boxes[i].pos1
+            posdiff = self.boxes[j].pos1[:2] - self.boxes[i].pos1[:2]
             scores.append(score_offset(self.images[i], self.images[j], posdiff[0], posdiff[1]))
 
         return np.array(scores)
@@ -577,6 +625,7 @@ class CompositeImage:
         for index, ((id1, id2), constraint) in enumerate(self.constraints.items()):
             dx, dy = constraint.dx, constraint.dy
             score = max(0.0000001, constraint.score)
+            score = score * score
 
             solution_mat[index*2, id1*2] = -score
             solution_mat[index*2, id2*2] = score
@@ -603,7 +652,7 @@ class CompositeImage:
         diffs = np.abs(np.array(diffs))
 
         self.debug("Solved", len(self.constraints), "constraints, with error: min {} max".format(
-                np.percentile(diffs, (0,1,50,99,100))))
+                np.percentile(diffs, (0,1,5,50,95,99,100)).astype(int)))
 
         if apply_positions:
             for i, box in enumerate(self.boxes):
@@ -683,34 +732,46 @@ class CompositeImage:
     def plot_scores(self, path):
         import matplotlib.pyplot as plt
 
-        fig, axis = plt.subplots(figsize=(15,15))
+        groups = [list(range(len(self.boxes)))]
+        names = ['']
+        if self.boxes[0].pos1.shape[0] == 3:
+            groups = []
+            names = []
+            vals = sorted(set(box.pos1[2] for box in self.boxes))
+            for val in vals:
+                groups.append([i for i in range(len(self.boxes)) if self.boxes[i].pos1[2] == val])
+                names.append('(plane z={})'.format(val))
 
-        for i in range(len(self.boxes)):
-            x, y = self.boxes[i].pos1[:2]
-            axis.text(y, -x, str(i), horizontalalignment='center', verticalalignment='center')
+        fig, axes = plt.subplots(nrows=len(groups), figsize=(12,12*len(groups)), squeeze=False)
 
-        poses = []
-        colors = []
-        sizes = []
-        for (i,j), constraint in self.constraints.items():
-            pos1, pos2 = self.boxes[i].pos1[:2], self.boxes[j].pos1[:2]
-            if i == 0 or j == 0:
-                print (i, j)
-                print (pos1, pos2, np.mean((pos1, pos2), axis=0))
-            if np.all(pos1 == pos2):
-                print (i, j, constraint)
-            pos = np.mean((pos1, pos2), axis=0)
-            poses.append((pos[1], -pos[0]))
-            colors.append(constraint.score)
-            sizes.append(50 if constraint.modeled else 200)
-            axis.arrow(pos[1] - constraint.dy/4, -pos[0] + constraint.dx/4, constraint.dy/2, -constraint.dx/2, color='black')
-            #axis.plot((pos1[0], pos2[0]), (pos1[1], pos2[1]), linewidth=1, color='red' if constraint.modeled else 'black')
-        poses = np.array(poses)
+        for indices, axis, name in zip(groups, axes.flatten(), names):
 
-        points = axis.scatter(poses[:,0], poses[:,1], c=colors, s=sizes)
-        fig.colorbar(points, ax=axis)
+            for i in indices:
+                x, y = self.boxes[i].pos1[:2]
+                axis.text(y, -x, str(i), horizontalalignment='center', verticalalignment='center')
 
-        axis.set_title('Scores of constraints (red = calculated)')
+            poses = []
+            colors = []
+            sizes = []
+            for (i,j), constraint in self.constraints.items():
+                if i not in indices or j not in indices: continue
+
+                pos1, pos2 = self.boxes[i].pos1[:2], self.boxes[j].pos1[:2]
+                if np.all(pos1 == pos2):
+                    print (i, j, constraint)
+                pos = np.mean((pos1, pos2), axis=0)
+                poses.append((pos[1], -pos[0]))
+                colors.append(constraint.score)
+                sizes.append(50 if constraint.modeled else 200)
+                axis.arrow(pos[1] - constraint.dy/2, -pos[0] + constraint.dx/2, constraint.dy/1, -constraint.dx/1,
+                        width=5, head_width=20, length_includes_head=True, color='black', alpha=0.3)
+                #axis.plot((pos1[0], pos2[0]), (pos1[1], pos2[1]), linewidth=1, color='red' if constraint.modeled else 'black')
+            poses = np.array(poses)
+
+            points = axis.scatter(poses[:,0], poses[:,1], c=colors, s=sizes)
+            fig.colorbar(points, ax=axis)
+
+            axis.set_title('Scores of constraints ' + name)
 
         fig.savefig(path)
 
