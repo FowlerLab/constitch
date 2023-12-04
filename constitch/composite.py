@@ -358,10 +358,17 @@ class CompositeImage:
                 score, dx, dy = future.result()
                 constraints[(index1,index2)] = Constraint(score, dx, dy)
         else:
-            for index1, index2 in self.progress(pairs):
-                score, dx, dy = calculate_offset(self.images[index1], self.images[index2],
-                        self.boxes[index1].size()[:2], self.boxes[index2].size()[:2])
-                constraints[(index1,index2)] = Constraint(score, dx, dy)
+            if self.precalculate_fft:
+                for index1, index2 in self.progress(pairs):
+                    score, dx, dy = calculate_offset(self.images[index1], self.images[index2],
+                            self.boxes[index1].size()[:2], self.boxes[index2].size()[:2],
+                            self.ffts[index1], self.ffts[index2])
+                    constraints[(index1,index2)] = Constraint(score, dx, dy)
+            else:
+                for index1, index2 in self.progress(pairs):
+                    score, dx, dy = calculate_offset(self.images[index1], self.images[index2],
+                            self.boxes[index1].size()[:2], self.boxes[index2].size()[:2])
+                    constraints[(index1,index2)] = Constraint(score, dx, dy)
 
         if debug and len(constraints) != 0:
             scores = np.array([const.score for const in constraints.values()])

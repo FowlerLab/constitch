@@ -129,6 +129,9 @@ def interpret_translation(image1, image2, yins, xins, ymin, ymax, xmin, xmax,
     max_peaks = max_peaks or num_peaks
     ncc_threshold = ncc_threshold or 0
 
+    xins = xins[:max_peaks]
+    yins = yins[:max_peaks]
+
     _ncc = -np.infty
     y = 0
     x = 0
@@ -148,19 +151,21 @@ def interpret_translation(image1, image2, yins, xins, ymin, ymax, xmin, xmax,
         xvals = xmags * xsign
         _poss.append([yvals, xvals])
     poss = np.array(_poss)
+    """
     valid_ind = (
         (ymin <= poss[:, 0, :])
         & (poss[:, 0, :] <= ymax)
         & (xmin <= poss[:, 1, :])
         & (poss[:, 1, :] <= xmax)
     )
-    assert np.any(valid_ind)
+    """
+    #assert np.any(valid_ind)
     #print (poss.shape)
     #print (valid_ind.shape)
-    valid_ind = np.any(valid_ind, axis=0)
+    #valid_ind = np.any(valid_ind, axis=0)
     #print (valid_ind.shape)
     #print (valid_ind[:100])
-    for peakindex, pos in enumerate(np.moveaxis(poss[:, :, valid_ind], -1, 0)):
+    for peakindex, pos in enumerate(np.moveaxis(poss, -1, 0)):
         for yval, xval in pos:
             if (ymin <= yval) and (yval <= ymax) and (xmin <= xval) and (xval <= xmax):
                 subI1 = extract_overlap_subregion(image1, yval, xval)
