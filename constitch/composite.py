@@ -91,7 +91,10 @@ class CompositeImage:
             progress = bool(self.progress),
             precalculate_fft = self.precalculate_fft,
         )
-        if save_images: obj['images'] = self.images
+        if save_images:
+            obj['images'] = self.images
+        else:
+            obj['images'] = [None] * len(self.images)
 
         with open(path, 'wb') as ofile:
             pickle.dump(obj, ofile)
@@ -512,8 +515,14 @@ class CompositeImage:
 
         if filter_outliers:
             self.debug('Filtered out', np.sum(~model.inlier_mask_), 'constraints as outliers')
+
+            if np.mean(model.inlier_mask_.astype(int)) < 0.8:
+                warnings.warn("Stage model filtered out over 20% of constraints as outilers."
+                        " It may have hyperoptimized to the data, make sure all are actually outliers")
+
             for (i,j) in indices[~model.inlier_mask_]:
                 del self.constraints[(i,j)]
+
             model = model.estimator_
             """
             error = model.predict(est_poses) - const_poses
@@ -576,7 +585,7 @@ class CompositeImage:
         for i,j in pairs:
             dx, dy = self.stage_model.predict(np.array([self.boxes[i].pos1, self.boxes[j].pos1]).reshape(1,-1)).flatten().astype(int)
             #dx, dy = self.stage_model.predict((self.boxes[j].pos1 - self.boxes[i].pos1).reshape(1,-1)).flatten().astype(int)
-            assert (max(abs(dx), abs(dy)) <= max(self.images[i].shape[0], self.images[j].shape[1])), (
+            assert (max(abs(dx), abs(dy)) <= max(self.boxes[i].size()[:2])), (
                 "Image offset from stage model does not contain any overlap."
                 " The stage model may not have correctly modeled the movement")
             score = score_offset(self.images[i], self.images[j], dx, dy) * score_multiplier
@@ -624,8 +633,9 @@ class CompositeImage:
         
         for index, ((id1, id2), constraint) in enumerate(self.constraints.items()):
             dx, dy = constraint.dx, constraint.dy
-            score = max(0.0000001, constraint.score)
-            score = score * score
+            score = max(0, constraint.score)
+            score = constraint.score * constraint.score
+            score = max(0.000001, score)
 
             solution_mat[index*2, id1*2] = -score
             solution_mat[index*2, id2*2] = score
@@ -757,8 +767,8 @@ class CompositeImage:
                 if i not in indices or j not in indices: continue
 
                 pos1, pos2 = self.boxes[i].pos1[:2], self.boxes[j].pos1[:2]
-                if np.all(pos1 == pos2):
-                    print (i, j, constraint)
+                #if np.all(pos1 == pos2):
+                    #print (i, j, constraint)
                 pos = np.mean((pos1, pos2), axis=0)
                 poses.append((pos[1], -pos[0]))
                 colors.append(constraint.score)
