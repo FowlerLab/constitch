@@ -139,7 +139,7 @@ class CompositeImage:
             return iio.improps(image).shape[:2]
         return image.shape[:2]
 
-    def add_images(self, images, positions=None, boxes=None, scale='pixel'):
+    def add_images(self, images, positions=None, boxes=None, scale='pixel', imagescale=1):
         """ Adds images to the composite
 
         Args:
@@ -195,7 +195,7 @@ class CompositeImage:
                 imageshape[:2] = np.array(self.imageshape(images[i]))
                 self.boxes.append(BBox(
                     positions[i] * scale,
-                    positions[i] * scale + imageshape * self.scale
+                    positions[i] * scale + imageshape * self.scale * imagescale
                 ))
         
         self.images.extend(images)
@@ -249,25 +249,23 @@ class CompositeImage:
             tile_offset = tile_shape[0] - overlap[0], tile_shape[1] - overlap[1]
             num_tiles = (image.shape[0] - overlap[0]) // tile_offset[0], (image.shape[1] - overlap[1]) // tile_offset[1]
 
-        print (tile_offset, tile_shape, overlap)
-
         images = []
         positions = []
         for xpos in range(0, tile_offset[0] * num_tiles[0], tile_offset[0]):
             for ypos in range(0, tile_offset[1] * num_tiles[1], tile_offset[1]):
                 images.append(image[xpos:xpos+tile_shape[0],ypos:ypos+tile_shape[1]])
-                print (images[-1])
-                print ()
                 positions.append((xpos, ypos))
 
+        print (positions)
         self.add_images(images, positions)
+        print (self.boxes)
     
     def image_positions():
         """ Returns the positions of all images in pixel values
         """
         return np.array([box.pos1 for box in self.boxes])
 
-    def merge(self, other_composite):
+    def merge(self, other_composite, new_layer=False):
         """ Adds all images and constraints from another montage into this one.
             
             other_composite: CompositeImage
@@ -281,9 +279,28 @@ class CompositeImage:
         scale_conversion = 1 if other_composite.scale == 1 else 1 / other_composite.scale
         start_index = len(self.images)
 
-        for image, box in zip(other_composite.images, other_composite.boxes):
+        for image in other_composite.images:
             self.images.append(image)
-            self.boxes.append(BBox(box.pos1 * scale_conversion, box.pos2 * scale_conversion))
+
+        if new_layer:
+            if len(self.boxes) and len(self.boxes[0].pos1) < 3:
+                for box in self.boxes:
+                    box.pos1.resize(3)
+                    box.pos2.resize(3)
+
+            new_layer = self.boxes.pos2[:,2].max() + 1
+
+            for box in other_composite.boxes:
+                newbox = BBox(box.pos1 * scale_conversion, box.pos2 * scale_conversion)
+                newbox.pos1.resize(3)
+                newbox.pos2.resize(3)
+                newbox.pos1[2] = new_layer
+                newbox.pos2[2] = new_layer
+                self.boxes.append(newbox)
+
+        else:
+            for box in other_composite.boxes:
+                self.boxes.append(BBox(box.pos1 * scale_conversion, box.pos2 * scale_conversion))
 
         if self.precalculate_fft:
             if other_composite.precalculate_fft:
@@ -493,11 +510,11 @@ class CompositeImage:
         fake_consts = self.calc_constraints(fake_pairs, return_constraints=True, debug=False).values()
         scores = np.array([const.score for const in real_consts] + [const.score for const in fake_consts])
 
-        fig, axis = plt.subplots()
-        axis.hist(scores[:len(real_consts)], bins=15, alpha=0.5)
-        axis.hist(scores[len(real_consts):], bins=15, alpha=0.5)
+        #fig, axis = plt.subplots()
+        #axis.hist(scores[:len(real_consts)], bins=15, alpha=0.5)
+        #axis.hist(scores[len(real_consts):], bins=15, alpha=0.5)
         #axis.hist(scores, bins=15)
-        fig.savefig('plots/ncc_hist.png')
+        #fig.savefig('plots/ncc_hist.png')
 
         #thresh = skimage.filters.threshold_otsu(scores)
         mix_model = sklearn.mixture.GaussianMixture(n_components=2, random_state=random_state)
@@ -838,6 +855,7 @@ class CompositeImage:
 
     def plot_scores(self, path):
         import matplotlib.pyplot as plt
+        import matplotlib.patches
 
         groups = [list(range(len(self.boxes)))]
         names = ['']
@@ -849,13 +867,15 @@ class CompositeImage:
                 groups.append([i for i in range(len(self.boxes)) if self.boxes[i].pos1[2] == val])
                 names.append('(plane z={})'.format(val))
 
-        fig, axes = plt.subplots(nrows=len(groups), figsize=(12,12*len(groups)), squeeze=False)
+        fig, axes = plt.subplots(nrows=len(groups), figsize=(12,12*len(groups)), squeeze=False, sharex=True, sharey=True)
 
         for indices, axis, name in zip(groups, axes.flatten(), names):
 
             for i in indices:
                 x, y = self.boxes[i].pos1[:2]
+                width, height = self.boxes[i].size()[:2]
                 axis.text(y, -x, str(i), horizontalalignment='center', verticalalignment='center')
+                axis.add_patch(matplotlib.patches.Rectangle((y, -x - width), height, width, edgecolor='grey', facecolor='none'))
 
             poses = []
             colors = []
