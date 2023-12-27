@@ -58,6 +58,7 @@ class BBoxList(list):
 class CompositeImage:
     def __init__(self, precalculate_fft=False, debug=True, progress=False, executor=None):
         self.images = []
+        self.greyimages = []
         self.boxes = BBoxList()
         self.constraints = {}
         self.scale = 1
@@ -112,16 +113,22 @@ class CompositeImage:
         composite = cls(**params)
         composite.__dict__.update(obj)
         return composite
-    
+
     def imagearr(self, image):
+        image = self.fullimagearr(image)
+        while len(image.shape) > 2:
+            image = image[:,:,0]
+        return image
+
+    def fullimagearr(self, image):
         if type(image) == str:
-            return iio.imread(image)
+            image = iio.imread(image)
         return image
 
     def imageshape(self, image):
         if type(image) == str:
-            return iio.improps(image).shape
-        return image.shape
+            return iio.improps(image).shape[:2]
+        return image.shape[:2]
 
     def add_images(self, images, positions=None, boxes=None, scale='pixel'):
         """ Adds images to the composite
@@ -154,7 +161,7 @@ class CompositeImage:
                 which are applied to each axis.
         """
         positions = np.asarray(positions)
-        assert len(self.imageshape(images[0])) == 2, "Only 2d images are supported"
+        #assert len(self.imageshape(images[0])) == 2, "Only 2d images are supported"
         assert positions is not None or boxes is not None, "Must specify positions or boxes"
 
         n_dims = positions.shape[1]
@@ -190,6 +197,61 @@ class CompositeImage:
                 self.ffts.extend(self.progress(self.executor.map(fft_job, images), total=len(images)))
             else:
                 self.ffts.extend(self.progress(map(fft_job, images), total=len(images)))
+
+    def add_split_image(self, image, num_tiles=None, tile_shape=None, overlap=0.1):
+        """ Adds an image split into a number of tiles
+
+            image: ndarray
+                the image that will be split into tiles
+            num_tiles: int or (int, int)
+                the number of tiles to split the image into. Either this or tile_shape
+                should be specified.
+            tile_shape: (int, int)
+                The shape of the resulting tiles, if num_tiles isn't specified the maximum
+                number of tiles that fit in the image are extracted.
+            overlap: float, int or (float or int, float or int)
+                The amount of overlap between neighboring tiles. Zero will result in no overlap,
+                a floating point number represents a percentage of the size of the tile, and an
+                integer number represents a pixel overlap.
+        """
+        assert num_tiles or tile_shape, "Must specify either num_tiles or tile_shape"
+
+        if type(num_tiles) == int:
+            num_tiles = (num_tiles, num_tiles)
+        if type(overlap) in (int, float):
+            overlap = (overlap, overlap)
+        
+        if num_tiles:
+            if type(overlap[0]) == float:
+                tile_offset = (
+                    int(image.shape[0] // (num_tiles[0] + overlap[0])),
+                    int(image.shape[1] // (num_tiles[1] + overlap[1])),
+                )
+                overlap = int(tile_offset[0] * overlap[0]), int(tile_offset[1] * overlap[1])
+            else:
+                tile_offset = (
+                    int((image.shape[0] - overlap[0]) // num_tiles[0]),
+                    int((image.shape[1] - overlap[1]) // num_tiles[1]),
+                )
+            tile_shape = tile_offset[0] + overlap[0], tile_offset[1] + overlap[1]
+        else:
+            if type(overlap[0]) == float:
+                overlap = int(tile_shape[0] * overlap[0]), int(tile_shape[1] * overlap[1])
+            tile_offset = tile_shape[0] - overlap[0], tile_shape[1] - overlap[1]
+            num_tiles = (image.shape[0] - overlap[0]) // tile_offset[0], (image.shape[1] - overlap[1]) // tile_offset[1]
+
+        print (tile_offset, tile_shape, overlap)
+
+        images = []
+        positions = []
+        for xpos in range(0, tile_offset[0] * num_tiles[0], tile_offset[0]):
+            for ypos in range(0, tile_offset[1] * num_tiles[1], tile_offset[1]):
+                images.append(image[xpos:xpos+tile_shape[0],ypos:ypos+tile_shape[1]])
+                print (images[-1])
+                print ()
+                positions.append((xpos, ypos))
+
+        self.add_images(images, positions)
     
     def image_positions():
         """ Returns the positions of all images in pixel values
@@ -272,7 +334,7 @@ class CompositeImage:
         """
         self.scale = scale_factor
 
-    def find_pairs(self, overlap_threshold=None, needs_overlap=False):
+    def find_pairs(self, overlap_threshold=None, needs_overlap=False, connectivity=1):
         """ Finds all pairs of images that overlap, based on the estimated positions
             
             Args:
@@ -283,6 +345,14 @@ class CompositeImage:
                     Can be negative, in which case images that are within said amount
                     of touching would be overlapping.
                     Additionally a ndarray with a value for each dimension can be passed.
+
+                needs_overlap (bool):
+                    Whether or not images need to be fully overlapping or if touching
+                    on the edge is enough to count it as a pair
+
+                connectivity (int):
+                    If this number is greater than 1, some pairs will be pruned, while
+                    keeping the maximum di
 
             Returns: np.ndarray shape (N, 2)
                 The sequence of pairs of indices of the images that overlap.
@@ -304,14 +374,14 @@ class CompositeImage:
                         pairs.append((i,j))
         return np.array(pairs)
 
-    def find_unconstrained_pairs(self, overlap_threshold=None, needs_overlap=False):
+    def find_unconstrained_pairs(self, **kwargs):
         """ Finds all pairs of images that overlap based on the estimated positions and
         that don't already have a constraint.
 
         Returns (np.ndarray shape (N, 2)):
             The sequence of pairs of indices of the images that overlap without constraints.
         """
-        pairs = self.find_pairs(overlap_threshold=overlap_threshold, needs_overlap=needs_overlap)
+        pairs = self.find_pairs(**kwargs)
         mask = [(i,j) not in self.constraints for i,j in pairs]
         return pairs[mask]
 
@@ -679,7 +749,7 @@ class CompositeImage:
 
 
     def stitch_images(self, indices=None, real_images=None, bg_value=None, return_bg_mask=False,
-            keep_zero=False, merger=merging.MeanMerger):
+            mins=None, maxes=None, keep_zero=False, merger=merging.MeanMerger):
         """ Combines images in the composite into a single image
             
             indices: sequence of int
@@ -709,9 +779,20 @@ class CompositeImage:
         if indices is None:
             indices = list(range(len(self.images)))
 
-        mins = np.array(self.boxes[indices[0]].pos1[:2])
-        maxes = np.array(self.boxes[indices[0]].pos2[:2])
-        for i in indices[1:]:
+        if keep_zero:
+            mins = 0
+
+        start_mins = np.array(self.boxes[indices[0]].pos1[:2])
+        start_maxes = np.array(self.boxes[indices[0]].pos2[:2])
+        
+        if mins is not None:
+            start_mins[:] = mins
+        if maxes is not None:
+            start_maxes[:] = maxes
+
+        mins, maxes = start_mins, start_maxes
+
+        for i in indices:
             mins = np.minimum(mins, self.boxes[i].pos1[:2])
             maxes = np.maximum(maxes, self.boxes[i].pos2[:2])
 
@@ -721,14 +802,14 @@ class CompositeImage:
         if real_images is None:
             real_images = self.images
 
-        example_image = self.imagearr(real_images[0])
+        example_image = self.fullimagearr(real_images[0])
         full_shape = tuple((maxes - mins) * self.scale) + example_image.shape[2:]
         merger = merger(full_shape, example_image.dtype)
 
         for i in indices:
             pos1 = ((self.boxes[i].pos1[:2] - mins) * self.scale).astype(int)
             pos2 = ((self.boxes[i].pos2[:2] - mins) * self.scale).astype(int)
-            image = self.imagearr(real_images[i])
+            image = self.fullimagearr(real_images[i])
             if np.any(pos2 - pos1 != image.shape[:2]):
                 warnings.warn("resizing some images")
                 image = skimage.transform.resize(image, pos2 - pos1)

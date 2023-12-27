@@ -1,5 +1,8 @@
+import sys
 import numpy as np
 import skimage.io
+
+from .. import utils
 
 class Merger:
     """Abstract class that specifies the methods required for an image merger.
@@ -105,13 +108,20 @@ class MaskMerger(NearestMerger):
         self.overlap_threshold = overlap_threshold
 
     def add_image(self, image, location):
+        print ("Adding image", location, file=sys.stderr)
         image = image.astype(int)
 
-        nextlabel = 1
-        while nextlabel in self.image:
-            nextlabel += 1
+        #nextlabel = 1
+        #while nextlabel in self.image:
+            #nextlabel += 1
 
-        for label in np.unique(image):
+        image[image!=0] += self.image.max()
+
+        overlapping_mask = self.dists[location] != 0
+        overlapping_labels = np.unique(image[overlapping_mask])
+
+        print ("Merging {} overlapping labels".format(len(overlapping_labels)), file=sys.stderr)
+        for label in utils.simple_progress(overlapping_labels):
             if label == 0: continue
 
             mask = image == label
@@ -123,11 +133,11 @@ class MaskMerger(NearestMerger):
                 if min(np.sum(mask), np.sum(othermask)) * self.overlap_threshold <= np.sum(mask & othermask):
                     image[mask] = otherlabel
                     break
-            else:
-                image[mask] = nextlabel
-                nextlabel += 1
-                while nextlabel in self.image:
-                    nextlabel += 1
+            #else:
+                #image[mask] = nextlabel
+                #nextlabel += 1
+                #while nextlabel in self.image:
+                    #nextlabel += 1
         
         super().add_image(image, location)
 
