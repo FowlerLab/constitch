@@ -207,6 +207,11 @@ def calculate_offset(image1, image2, shape1=None, shape2=None, fft1=None, fft2=N
     if type(image2) == str:
         image2 = skimage.io.imread(image2)
 
+    while len(image1.shape) > 2:
+        image1 = image1[:,:,0]
+    while len(image2.shape) > 2:
+        image2 = image2[:,:,0]
+
     if shape1 is not None and tuple(shape1) != image1.shape:
         image1 = skimage.transform.resize(image1, shape1)
     if shape2 is not None and tuple(shape2) != image2.shape:
