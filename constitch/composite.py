@@ -54,6 +54,9 @@ class BBoxList(list):
     def pos2(self):
         return np.array([box.pos2 for box in self])
 
+    def size():
+        return np.array([box.size() for box in self])
+
 
 class CompositeImage:
     def __init__(self, precalculate_fft=False, debug=True, progress=False, executor=None):
@@ -80,6 +83,12 @@ class CompositeImage:
             self.debug("Using {} bytes ({}) for ffts".format(mem_ffts, utils.human_readable(mem_ffts)))
             mem_images += mem_ffts
         self.debug("Total: {} ({})".format(mem_images, utils.human_readable(mem_images)))
+
+    @classmethod
+    def view(cls, other):
+        composite = cls()
+        composite.root = other
+        composite.mapping = None
 
     def save(self, path, save_images=True):
         obj = dict(
