@@ -125,12 +125,13 @@ class MaskMerger(NearestMerger):
             if label == 0: continue
 
             mask = image == label
+            mask_count = np.count_nonzero(mask)
 
             for otherlabel in np.unique(self.image[location][mask]):
                 if otherlabel == 0: continue
 
                 othermask = self.image[location] == otherlabel
-                if min(np.sum(mask), np.sum(othermask)) * self.overlap_threshold <= np.sum(mask & othermask):
+                if min(mask_count, np.count_nonzero(othermask)) * self.overlap_threshold <= np.count_nonzero(mask & othermask):
                     image[mask] = otherlabel
                     break
             #else:
