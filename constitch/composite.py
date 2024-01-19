@@ -400,14 +400,14 @@ class CompositeImage:
                         pairs.append((i,j))
         return np.array(pairs)
 
-    def find_unconstrained_pairs(self, **kwargs):
+    def find_unconstrained_pairs(self, *args, **kwargs):
         """ Finds all pairs of images that overlap based on the estimated positions and
         that don't already have a constraint.
 
         Returns (np.ndarray shape (N, 2)):
             The sequence of pairs of indices of the images that overlap without constraints.
         """
-        pairs = self.find_pairs(**kwargs)
+        pairs = self.find_pairs(*args, **kwargs)
         mask = [(i,j) not in self.constraints for i,j in pairs]
         return pairs[mask]
 
@@ -805,11 +805,14 @@ class CompositeImage:
         if indices is None:
             indices = list(range(len(self.images)))
 
+        if type(indices[0]) == bool:
+            indices = [i for i in range(len(indices)) if indices[i]]
+
         if keep_zero:
             mins = 0
 
-        start_mins = np.array(self.boxes[indices[0]].pos1[:2])
-        start_maxes = np.array(self.boxes[indices[0]].pos2[:2])
+        start_mins = np.array(self.boxes[0].pos1[:2])
+        start_maxes = np.array(self.boxes[0].pos2[:2])
         
         if mins is not None:
             start_mins[:] = mins
@@ -821,6 +824,8 @@ class CompositeImage:
         for i in indices:
             mins = np.minimum(mins, self.boxes[i].pos1[:2])
             maxes = np.maximum(maxes, self.boxes[i].pos2[:2])
+
+        print (mins, maxes)
 
         if keep_zero:
             mins = np.zeros_like(mins)
