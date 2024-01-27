@@ -44,18 +44,51 @@ class BBox:
     def size(self):
         return self.pos2 - self.pos1
 
+    def center(self):
+        return (self.pos1 + self.pos2) / 2
 
-class BBoxList(list):
-    @property
-    def pos1(self):
-        return np.array([box.pos1 for box in self])
 
-    @property
-    def pos2(self):
-        return np.array([box.pos2 for box in self])
+class BBoxList:
+    def __init__(self, pos1=None, pos2=None):
+        self.pos1 = pos1
+        self.pos2 = pos2
+        self.boxes = []
+        if pos2 is not None:
+            for i in range(len(self.pos1)):
+                self.boxes.append(BBox(self.pos1[i], self.pos2[i]))
 
-    def size():
-        return np.array([box.size() for box in self])
+    def append(self, box):
+        self.boxes.append(box)
+        if self.pos1 is None:
+            self.pos1 = box.pos1.reshape(1,-1)
+            self.pos2 = box.pos2.reshape(1,-1)
+        else:
+            self.pos1 = np.concatenate([self.pos1, box.pos1.reshape(1,-1)], axis=0)
+            self.pos2 = np.concatenate([self.pos2, box.pos2.reshape(1,-1)], axis=0)
+            for i in range(len(self.boxes)):
+                self.boxes[i].pos1 = self.pos1[i]
+                self.boxes[i].pos2 = self.pos2[i]
+
+    def __getitem__(self, index):
+        return self.boxes[index]
+
+    def __len__(self):
+        return len(self.boxes)
+
+    def __iter__(self):
+        return iter(self.boxes)
+
+    def size(self):
+        return self.pos2 - self.pos1
+
+    def center(self):
+        return (self.pos1 + self.pos2) / 2
+
+    def __repr__(self):
+        return "BBoxList(pos1={}, pos2={})".format(repr(self.pos1), repr(self.pos2))
+
+    def __str__(self):
+        return "BBoxList(pos1={}, pos2={})".format(self.pos1, self.pos2)
 
 
 class CompositeImage:
@@ -93,7 +126,7 @@ class CompositeImage:
 
     def save(self, path, save_images=True):
         obj = dict(
-            boxes = self.boxes,
+            boxes = (self.boxes.pos1, self.boxes.pos2),
             constraints = self.constraints,
             scale = self.scale,
             stage_model = self.stage_model,
@@ -120,6 +153,8 @@ class CompositeImage:
         params.update(kwargs)
 
         composite = cls(**params)
+        pos1, pos2 = obj.pop('boxes')
+        composite.boxes = BBoxList(pos1, pos2)
         composite.__dict__.update(obj)
         return composite
 
@@ -360,7 +395,7 @@ class CompositeImage:
         """
         self.scale = scale_factor
 
-    def find_pairs(self, overlap_threshold=None, needs_overlap=False, connectivity=1):
+    def find_pairs(self, overlap_threshold=None, needs_overlap=False, max_pairs=None):
         """ Finds all pairs of images that overlap, based on the estimated positions
             
             Args:
@@ -385,6 +420,7 @@ class CompositeImage:
         """
         pairs = []
         for i in range(len(self.images)):
+            start_len = len(pairs)
             for j in range(i+1,len(self.images)):
                 box1, box2 = self.boxes[i], self.boxes[j]
                 
@@ -398,6 +434,10 @@ class CompositeImage:
                 else:
                     if box1.collides(box2):
                         pairs.append((i,j))
+
+                if max_pairs and len(pairs) - start_len >= max_pairs:
+                    break
+
         return np.array(pairs)
 
     def find_unconstrained_pairs(self, *args, **kwargs):
@@ -774,7 +814,7 @@ class CompositeImage:
         return poses
 
 
-    def stitch_images(self, indices=None, real_images=None, bg_value=None, return_bg_mask=False,
+    def stitch_images(self, indices=None, real_images=None, out=None, bg_value=None, return_bg_mask=False,
             mins=None, maxes=None, keep_zero=False, merger=merging.MeanMerger):
         """ Combines images in the composite into a single image
             
@@ -825,7 +865,7 @@ class CompositeImage:
             mins = np.minimum(mins, self.boxes[i].pos1[:2])
             maxes = np.maximum(maxes, self.boxes[i].pos2[:2])
 
-        print (mins, maxes)
+        self.debug (mins, maxes)
 
         if keep_zero:
             mins = np.zeros_like(mins)
@@ -836,6 +876,10 @@ class CompositeImage:
         example_image = self.fullimagearr(real_images[0])
         full_shape = tuple((maxes - mins) * self.scale) + example_image.shape[2:]
         merger = merger(full_shape, example_image.dtype)
+        if out is not None:
+            assert merger.image.shape == out.shape and merger.image.dtype == out.dtype, (
+                "Provided output image does not match expected shape or dtype: {} {}".format(merger.image.shape, merger.image.dtype))
+            merger.image = out
 
         for i in indices:
             pos1 = ((self.boxes[i].pos1[:2] - mins) * self.scale).astype(int)
@@ -858,54 +902,119 @@ class CompositeImage:
         return full_image
 
 
-    def plot_scores(self, path):
+    def plot_scores(self, path, score_func=None):
         import matplotlib.pyplot as plt
         import matplotlib.patches
 
+            
+
         groups = [list(range(len(self.boxes)))]
+        const_groups = self.constraints.keys()
         names = ['']
         if self.boxes[0].pos1.shape[0] == 3:
             groups = []
+            const_groups = []
             names = []
+
             vals = sorted(set(box.pos1[2] for box in self.boxes))
+            print (vals)
             for val in vals:
                 groups.append([i for i in range(len(self.boxes)) if self.boxes[i].pos1[2] == val])
+                const_groups.append([(i,j) for (i,j) in self.constraints if self.boxes[i].pos1[2] == val and self.boxes[j].pos1[2] == val])
                 names.append('(plane z={})'.format(val))
 
-        fig, axes = plt.subplots(nrows=len(groups), figsize=(12,12*len(groups)), squeeze=False, sharex=True, sharey=True)
+            new_const_groups = {}
+            for i,j in self.constraints:
+                pair = (self.boxes[i].pos1[2], self.boxes[j].pos1[2])
+                if pair[0] == pair[1]: continue
+                new_const_groups[pair] = new_const_groups.get(pair, [])
+                new_const_groups[pair].append((i,j))
+            
+            for pair, consts in new_const_groups.items():
+                groups.append([])
+                const_groups.append(consts)
+                names.append('(consts z={} -> z={})'.format(pair[0], pair[1]))
 
-        for indices, axis, name in zip(groups, axes.flatten(), names):
+        axis_size = 12
+        grid_size = int(np.sqrt(len(groups))) + 1
+        fig, axes = plt.subplots(nrows=grid_size, ncols=grid_size, figsize=(axis_size*grid_size,axis_size*grid_size), squeeze=False, sharex=True, sharey=True)
 
-            for i in indices:
-                x, y = self.boxes[i].pos1[:2]
-                width, height = self.boxes[i].size()[:2]
-                axis.text(y, -x, str(i), horizontalalignment='center', verticalalignment='center')
+        for indices, const_pairs, axis, name in zip(groups, const_groups, axes.flatten(), names):
+            print (name)
+
+            for i,index in enumerate(indices):
+                x, y = self.boxes[index].pos1[:2]
+                width, height = self.boxes[index].size()[:2]
+                axis.text(y + height / 2, -x - width / 2, "{}\n({})".format(index, i), horizontalalignment='center', verticalalignment='center')
                 axis.add_patch(matplotlib.patches.Rectangle((y, -x - width), height, width, edgecolor='grey', facecolor='none'))
 
             poses = []
             colors = []
             sizes = []
-            for (i,j), constraint in self.constraints.items():
-                if i not in indices or j not in indices: continue
+            #for (i,j), constraint in self.constraints.items():
+                #if i not in indices or j not in indices: continue
+            for i,j in const_pairs:
+                constraint = self.constraints[(i,j)]
 
-                pos1, pos2 = self.boxes[i].pos1[:2], self.boxes[j].pos1[:2]
+                pos1, pos2 = self.boxes[i].center()[:2], self.boxes[j].center()[:2]
                 #if np.all(pos1 == pos2):
                     #print (i, j, constraint)
                 pos = np.mean((pos1, pos2), axis=0)
                 poses.append((pos[1], -pos[0]))
-                colors.append(constraint.score)
+                score = constraint.score if score_func is None else score_func(i, j, constraint)
+                colors.append(score)
                 sizes.append(50 if constraint.modeled else 200)
                 axis.arrow(pos[1] - constraint.dy/2, -pos[0] + constraint.dx/2, constraint.dy/1, -constraint.dx/1,
-                        width=5, head_width=20, length_includes_head=True, color='black', alpha=0.3)
+                        width=5, head_width=20, length_includes_head=True, color='black')
                 #axis.plot((pos1[0], pos2[0]), (pos1[1], pos2[1]), linewidth=1, color='red' if constraint.modeled else 'black')
             poses = np.array(poses)
 
-            points = axis.scatter(poses[:,0], poses[:,1], c=colors, s=sizes)
+            points = axis.scatter(poses[:,0], poses[:,1], c=colors, s=sizes, alpha=0.5)
             fig.colorbar(points, ax=axis)
 
             axis.set_title('Scores of constraints ' + name)
 
         fig.savefig(path)
+
+
+    def score_heatmap(self, path, score_func=None):
+        import matplotlib.pyplot as plt
+
+        n_axes = self.boxes.pos1.shape[1]
+
+        fig, axes = plt.subplots(nrows=n_axes, figsize=(8, 5*n_axes))
+
+        for index, axis in enumerate(axes):
+            values = np.unique(self.boxes.pos1[:,index])
+            if len(values) > 25:
+                values = np.linspace(values[0], values[-1], 25)
+
+            scores = np.zeros((len(values), len(values)))
+            counts = np.zeros(scores.shape, int)
+
+            for (i,j), constraint in self.constraints.items():
+                posi = self.boxes[i].pos1
+                posj = self.boxes[j].pos1
+                xval, yval = np.digitize([posi[index], posj[index]], values)
+                #xval, yval = min(xval, len(values)-1), min(yval, len(values)-1)
+                xval, yval = xval-1, yval-1
+                score = constraint.score if score_func is None else score_func(i, j, constraint)
+                scores[xval, yval] += score
+                counts[xval, yval] += 1
+
+            scores[counts!=0] /= counts[counts!=0]
+
+            heatmap = axis.imshow(scores)
+            #axis.set_xlabels(values)
+            #axis.set_ylabels(values)
+            fig.colorbar(heatmap, ax=axis)
+
+        fig.savefig(path)
+    
+    def constraint_accuracy(self, i, j, constraint):
+        new_offset = self.boxes[j].pos1[:2] - self.boxes[i].pos1[:2]
+        diff = (new_offset[0] - constraint.dx, new_offset[1] - constraint.dy)
+        return np.sqrt(diff[0]*diff[0] + diff[1]*diff[1])
 
 
 def fft_job(image):

@@ -120,7 +120,7 @@ def interpret_translation(image1, image2, yins, xins, ymin, ymax, xmin, xmax,
     """
     assert image1.ndim == 2
     assert image2.ndim == 2
-    assert np.array_equal(image1.shape, image2.shape)
+    #assert np.array_equal(image1.shape, image2.shape)
     sizeY = image1.shape[0]
     sizeX = image1.shape[1]
     assert np.all(0 <= yins) and np.all(yins < sizeY)
@@ -168,14 +168,21 @@ def interpret_translation(image1, image2, yins, xins, ymin, ymax, xmin, xmax,
     for peakindex, pos in enumerate(np.moveaxis(poss, -1, 0)):
         for yval, xval in pos:
             if (ymin <= yval) and (yval <= ymax) and (xmin <= xval) and (xval <= xmax):
-                subI1 = extract_overlap_subregion(image1, yval, xval)
-                subI2 = extract_overlap_subregion(image2, -yval, -xval)
-                ncc_val = ncc(subI1, subI2)
+                subI1 = image1[max(0,yval):,max(0,xval):]
+                subI2 = image2[max(0,-yval):,max(0,-xval):]
+                dim1 = min(subI1.shape[0], subI2.shape[0])
+                dim2 = min(subI1.shape[1], subI2.shape[1])
+                subI1 = subI1[:dim1,:dim2]
+                subI2 = subI2[:dim1,:dim2]
+                #subI1 = extract_overlap_subregion(image1, yval, xval)
+                #subI2 = extract_overlap_subregion(image2, -yval, -xval)
+                if subI1.size > 0:
+                    ncc_val = ncc(subI1, subI2)
+                    if ncc_val > _ncc:
+                        _ncc = float(ncc_val)
+                        y = int(yval)
+                        x = int(xval)
                 del subI1, subI2
-                if ncc_val > _ncc:
-                    _ncc = float(ncc_val)
-                    y = int(yval)
-                    x = int(xval)
 
         if peakindex+1 >= num_peaks and (peakindex+1 >= max_peaks or _ncc >= ncc_threshold):
             break
@@ -217,6 +224,7 @@ def calculate_offset(image1, image2, shape1=None, shape2=None, fft1=None, fft2=N
     if shape2 is not None and tuple(shape2) != image2.shape:
         image2 = skimage.transform.resize(image2, shape2)
 
+    orig_image1, orig_image2 = image1, image2
     if image1.shape != image2.shape:
         image1, image2 = image_diff_sizes(image1, image2)
 
@@ -228,7 +236,7 @@ def calculate_offset(image1, image2, shape1=None, shape2=None, fft1=None, fft2=N
         PCM = pcm_fft(fft1, fft2).real
     yins, xins, _ = multi_peak_max(PCM)
     del PCM
-    max_peak = interpret_translation(image1, image2, yins, xins, -sizeY, sizeY, -sizeX, sizeX,
+    max_peak = interpret_translation(orig_image1, orig_image2, yins, xins, -sizeY, sizeY, -sizeX, sizeX,
                     num_peaks=num_peaks, max_peaks=max_peaks, ncc_threshold=score_threshold)
     return max_peak
 

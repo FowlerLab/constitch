@@ -110,7 +110,7 @@ class LastMerger:
         self.image[location] = image
 
     def final_image(self):
-        return self.image, np.zeros(self.image, dtype=bool)
+        return self.image, np.ones(self.image.shape, dtype=bool)
 
 
 class MaskMerger(NearestMerger):
