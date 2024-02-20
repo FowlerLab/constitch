@@ -623,7 +623,7 @@ class CompositeImage:
 
         self.debug('Filtered out', start_size - len(self.constraints), 'constraints with the threshold', score_threshold)
 
-    def estimate_stage_model(self, model=None, filter_outliers=False, random_state=12345):
+    def estimate_stage_model(self, model=None, filter_outliers=False, pairs=None, random_state=12345):
         """ Estimages a stage model that translates between estimated
         position differences and pairwise alignment differences.
             
@@ -634,6 +634,7 @@ class CompositeImage:
                 Defaults to LinearRegression
         """
         model = model or SimpleOffsetModel()
+        pairs = pairs or self.constraints.keys()
         if filter_outliers:
             model = sklearn.linear_model.RANSACRegressor(model,
                     min_samples=self.boxes[0].pos1.shape[0]*2,
@@ -643,7 +644,8 @@ class CompositeImage:
         est_poses = []
         const_poses = []
         indices = []
-        for (i,j), constraint in self.constraints.items():
+        for (i,j) in pairs:
+            constraint = self.constraints[(i,j)]
             if not constraint.modeled:
                 #est_poses.append(self.boxes[j].pos1 - self.boxes[i].pos1)
                 est_poses.append(np.concatenate([self.boxes[i].pos1, self.boxes[j].pos1]))
@@ -690,8 +692,35 @@ class CompositeImage:
 
         self.stage_model = model
 
-    def filter_outliers(self):
-        pass
+    def filter_outliers(self, pairs=None):
+        """ Filters out any constraints that are clearly outliers, ie have a much larger magnitude than
+        any other constraint.
+        This doesn't take into account the stage model or the positions, to have the best outlier removal
+        follow this call with a call to `CompositeImage.estimate_stage_model(filter_outilers=True)`
+        
+        pairs: sequence of index pairs to be considered
+        """
+
+        pairs = pairs if pairs is not None else list(self.constraints.keys())
+        translations = []
+        real_pairs = []
+        for pair in pairs:
+            if (pair[0], pair[1]) in self.constraints:
+                constraint = self.constraints[(pair[0], pair[1])]
+                translations.append((constraint.dx, constraint.dy))
+                real_pairs.append(pair)
+
+        pairs = np.array(real_pairs)
+        translations = np.array(translations)
+
+        magnitudes = np.sqrt(np.sum(translations * translations, axis=1))
+        thresh = np.percentile(magnitudes, 95) * 10
+        mask = magnitudes > thresh
+        if np.sum(mask) > 0:
+            self.debug("Filtered out {} constraints as outilers".format(np.sum(mask)))
+
+        for pair in pairs[mask]:
+            del self.constraints[(pair[0], pair[1])]
 
     def model_constraints(self, pairs=None, score_multiplier=0.5, return_constraints=False):
         """ Uses the stored stage model (estimated by estimage_stage_model) to
