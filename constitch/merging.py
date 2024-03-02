@@ -106,18 +106,19 @@ class NearestMerger:
 class EfficientNearestMerger:
     def __init__(self, image_shape, image_dtype):
         self.image = np.zeros(image_shape, image_dtype)
-        self.dists = np.zeros(image_shape[:2] + (1,) * (len(image_shape)-2), dtype=np.uint8)
+        self.dists = np.zeros(image_shape[:2], dtype=np.uint8)
+        print (self.image.shape, self.dists.shape, file=sys.stderr)
 
     def add_image(self, image, location):
         xdists, ydists = np.arange(image.shape[0]), np.arange(image.shape[1])
-        np.clip(xdists, None, 255, out=xdists)
-        np.clip(ydists, None, 255, out=ydists)
+        xdists = np.clip(xdists, None, 255).astype(np.uint8)
+        ydists = np.clip(ydists, None, 255).astype(np.uint8)
         xdists = np.minimum(xdists, xdists[::-1])
         ydists = np.minimum(ydists, ydists[::-1])
         dists = np.minimum(*np.meshgrid(xdists, ydists)).T + 1
         
         cur_image, cur_dists = self.image[location], self.dists[location]
-        mask = dists > cur_dists
+        mask = dists >= cur_dists
         cur_image[mask] = image[mask]
         cur_dists[mask] = dists[mask]
 
