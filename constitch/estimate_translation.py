@@ -121,8 +121,8 @@ def interpret_translation(image1, image2, yins, xins, ymin, ymax, xmin, xmax,
     assert image1.ndim == 2
     assert image2.ndim == 2
     #assert np.array_equal(image1.shape, image2.shape)
-    sizeY = image1.shape[0]
-    sizeX = image1.shape[1]
+    sizeY = max(image1.shape[0], image2.shape[0])
+    sizeX = max(image1.shape[1], image2.shape[0])
     assert np.all(0 <= yins) and np.all(yins < sizeY)
     assert np.all(0 <= xins) and np.all(xins < sizeX)
 

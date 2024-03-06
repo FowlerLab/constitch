@@ -710,7 +710,10 @@ class CompositeImage:
                 translations.append((constraint.dx, constraint.dy))
                 real_pairs.append(pair)
 
+        if len(real_pairs) == 0:
+            return
         pairs = np.array(real_pairs)
+        print (pairs.shape)
         translations = np.array(translations)
 
         magnitudes = np.sqrt(np.sum(translations * translations, axis=1))
