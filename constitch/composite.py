@@ -531,7 +531,7 @@ class CompositeImage:
         Returns (float):
             threshold for score where all scores lower are likely to be bad constraints
         """
-        num_samples = num_samples or max(len(self.images) // 4, 10)
+        num_samples = num_samples or min(250, max(10, len(self.images) // 4))
         rng = np.random.default_rng(random_state)
         
         real_consts = rng.choice([const for const in self.constraints.values() if not const.modeled], size=num_samples)
@@ -710,7 +710,10 @@ class CompositeImage:
                 translations.append((constraint.dx, constraint.dy))
                 real_pairs.append(pair)
 
+        if len(real_pairs) == 0:
+            return
         pairs = np.array(real_pairs)
+        print (pairs.shape)
         translations = np.array(translations)
 
         magnitudes = np.sqrt(np.sum(translations * translations, axis=1))
@@ -783,7 +786,7 @@ class CompositeImage:
 
         return np.array(scores)
 
-    def solve_constraints(self, apply_positions=True):
+    def solve_constraints(self, apply_positions=True, filter_outliers=False):
         """ Solves all contained constraints to get absolute image positions.
 
         This is done by constructing a set of linear equations, with every constraint
@@ -821,7 +824,14 @@ class CompositeImage:
         solution_mat[-2, 0] = 1
         solution_mat[-1, 1] = 1
 
-        solution, residuals, rank, sing = np.linalg.lstsq(solution_mat, solution_vals, rcond=None)
+        if filter_outliers:
+            model = sklearn.linear_model.RANSACRegressor().fit(solution_mat, solution_vals)
+            solution = model.extimator_.coefs_
+            constraint_pairs = list(self.constraints.keys())
+            for i in np.argwhere(~model.inlier_mask_).flatten():
+                del self.constraints[constraint_pairs[i]]
+        else:
+            solution, residuals, rank, sing = np.linalg.lstsq(solution_mat, solution_vals, rcond=None)
 
         poses = np.round(solution.reshape(-1,2)).astype(int)
         poses -= poses.min(axis=0).reshape(1,2)
