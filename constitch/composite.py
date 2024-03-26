@@ -825,11 +825,14 @@ class CompositeImage:
         solution_mat[-1, 1] = 1
 
         if filter_outliers:
+            print ('outlier')
             model = sklearn.linear_model.RANSACRegressor().fit(solution_mat, solution_vals)
             solution = model.extimator_.coefs_
             constraint_pairs = list(self.constraints.keys())
             for i in np.argwhere(~model.inlier_mask_).flatten():
                 del self.constraints[constraint_pairs[i]]
+            print (model.inlier_mask_)
+            print (np.sum(model.inlier_mask_), len(model.inlier_mask_))
         else:
             solution, residuals, rank, sing = np.linalg.lstsq(solution_mat, solution_vals, rcond=None)
 
