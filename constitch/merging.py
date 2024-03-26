@@ -111,8 +111,8 @@ class EfficientNearestMerger:
 
     def add_image(self, image, location):
         xdists, ydists = np.arange(image.shape[0]), np.arange(image.shape[1])
-        xdists = np.clip(xdists, None, 255).astype(np.uint8)
-        ydists = np.clip(ydists, None, 255).astype(np.uint8)
+        xdists = np.clip(xdists, None, 254).astype(np.uint8)
+        ydists = np.clip(ydists, None, 254).astype(np.uint8)
         xdists = np.minimum(xdists, xdists[::-1])
         ydists = np.minimum(ydists, ydists[::-1])
         dists = np.minimum(*np.meshgrid(xdists, ydists)).T + 1
