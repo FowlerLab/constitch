@@ -123,11 +123,45 @@ def evaluate_stitching2(image, radius=10, innerradius=2):
     #coefs[mask] = model.coef_
     #coefs[mask[::-1,::-1]] = model.coef_[::-1]
 
-    #fig, axis = plt.subplots()
-    #axis.imshow(coefs)
-    #fig.savefig('plots/eval_stitch_coefs.png')
+    fig, axis = plt.subplots()
+    axis.imshow(coefs)
+    fig.savefig('plots/eval_stitch_coefs.png')
 
     return error#, coefs
+
+def evaluate_stitching4(image, radius=10):
+    values = np.zeros((radius * 2 + 1, radius * 2 + 1))
+
+    for x in range(-radius, radius + 1):
+        for y in range(-radius, radius + 1):
+            if x == 0 and y == 0: continue
+
+            section1 = image[max(0,x):image.shape[0]-max(0,-x), max(0,y):image.shape[1]-max(0,-y)]
+            section2 = image[max(0,-x):image.shape[0]-max(0,x), max(0,-y):image.shape[1]-max(0,y)]
+            corr = np.corrcoef(section1.reshape(-1), section2.reshape(-1))[0,1]
+
+            values[x+radius, y+radius] = corr
+
+    fig, axis = plt.subplots()
+    axis.imshow(values)
+    fig.savefig('plots/eval_stitch4.png')
+
+def evaluate_stitching5(image, radius=10):
+    values = np.zeros((radius * 2 + 1, radius * 2 + 1))
+
+    for x in range(-radius, radius + 1):
+        print (x)
+        for y in range(-radius, radius + 1):
+            if x == 0 and y == 0: continue
+
+            matrix = np.eye(image.size) + np.roll(np.eye(image.size), (0, x * image.shape[1] + y))
+            result, residuals, rank, singular = np.linalg.lstsq(matrix, image.reshape(-1))
+
+            values[x+radius, y+radius] = residuals
+
+    fig, axis = plt.subplots()
+    axis.imshow(values)
+    fig.savefig('plots/eval_stitch5.png')
 
 
 def evaluate_grid_stitching(image, bin_size=100, radius=10, innerradius=2):
@@ -170,4 +204,4 @@ def reverse_kernel(image, kernel):
         for y in range(result_shape[1]):
             pass
 
-evaluate_stitching = evaluate_stitching2
+evaluate_stitching = evaluate_stitching4

@@ -1,7 +1,9 @@
+import time
 import numpy as np
 import skimage.io
 import itertools
 
+import numba
 
 def pcm(image1, image2):
     """Compute peak correlation matrix for two images.
@@ -16,7 +18,8 @@ def pcm(image1, image2):
     del F1, F2
     FC /= np.abs(FC)
     FC = np.fft.ifft2(FC)
-    return FC.real.astype(np.float32)
+    FC = FC.real.astype(np.float32)
+    return FC
 
 def pcm_fft(F1, F2):
     """Compute peak correlation matrix for two images, with the fft already applied
@@ -39,8 +42,7 @@ def multi_peak_max(PCM):
     vals = PCM[row[::-1], col[::-1]]
     return row[::-1], col[::-1], vals
 
-
-def ncc(image1, image2):
+def ncc_slow(image1, image2):
     """Compute the normalized cross correlation for two images.
     """
     assert image1.ndim == 2
@@ -190,6 +192,53 @@ def interpret_translation(image1, image2, yins, xins, ymin, ymax, xmin, xmax,
 
 
 
+@numba.jit(nopython=True)
+def calc_pcm(fft1, fft2):
+    for i in range(fft1.shape[0]):
+        val = fft1[i] * np.conjugate(fft2[i])
+        fft1[i] = val / np.abs(val)
+    return fft1
+
+@numba.jit(nopython=True)
+def ncc(image1, image2):
+    """Compute the normalized cross correlation for two images.
+    """
+    mean1, mean2 = image1.mean(), image2.mean()
+    total = np.float64(0)
+    norm1, norm2 = np.float64(0), np.float64(0)
+    for val1, val2 in zip(image1.flat, image2.flat):
+        total += (val1 - mean1) * (val2 - mean2)
+        norm1 += val1 * val1
+        norm2 += val2 * val2
+    denom = np.sqrt(norm1) * np.sqrt(norm2)
+    if denom == 0 and total == 0:
+        return 0
+    return total / denom
+
+@numba.jit(nopython=True)
+def find_peaks(fft, image1, image2, num_peaks):
+    best_peak = (0,0,0)
+    for i in range(num_peaks):
+        peak_index = np.argmax(fft, axis=None)
+        xval, yval = peak_index // fft.shape[1], peak_index % fft.shape[1]
+
+        section1 = image1[max(0,xval):,max(0,yval):]
+        section2 = image2[max(0,-xval):,max(0,-yval):]
+        dim1 = min(section1.shape[0], section2.shape[0])
+        dim2 = min(section1.shape[1], section2.shape[1])
+        section1 = section1[:dim1,:dim2]
+        section2 = section2[:dim1,:dim2]
+        if section1.size == 0: continue
+
+        peak = (ncc2(section1, section2), xval, yval)
+
+        if peak[0] > best_peak[0]:
+            best_peak = peak
+
+        fft.flat[peak_index] = 0
+    return best_peak
+
+
 def image_diff_sizes(image1, image2):
     new_shape = max(image1.shape[0], image2.shape[0]), max(image1.shape[1], image2.shape[1])
 
@@ -206,9 +255,42 @@ def image_diff_sizes(image1, image2):
     return image1, image2
 
 
+def calculate_offset(image1, image2, shape1=None, shape2=None, fft1=None, fft2=None, num_peaks=4):
+    if type(image1) == str:
+        image1 = skimage.io.imread(image1)
+    if type(image2) == str:
+        image2 = skimage.io.imread(image2)
+
+    while len(image1.shape) > 2:
+        image1 = image1[:,:,0]
+    while len(image2.shape) > 2:
+        image2 = image2[:,:,0]
+
+    if shape1 is not None and tuple(shape1) != image1.shape:
+        image1 = skimage.transform.resize(image1, shape1)
+    if shape2 is not None and tuple(shape2) != image2.shape:
+        image2 = skimage.transform.resize(image2, shape2)
+
+    orig_image1, orig_image2 = image1, image2
+    if image1.shape != image2.shape:
+        image1, image2 = image_diff_sizes(image1, image2)
+
+    if fft1 is None:
+        fft1 = np.fft.fft2(image1)
+    else:
+        fft1 = fft1.copy() #fft1 is used for inplace computation to save mem
+
+    if fft2 is None:
+        fft2 = np.fft.fft2(image2)
+
+    fft = calc_pcm(fft1.reshape(-1), fft2.reshape(-1)).reshape(fft1.shape)
+    fft = np.fft.ifft2(fft).real
+
+    best_peak = find_peaks(fft, orig_image1, orig_image2, num_peaks)
+    return best_peak
 
 
-def calculate_offset(image1, image2, shape1=None, shape2=None, fft1=None, fft2=None, num_peaks=2, max_peaks=5, score_threshold=0.1):
+def calculate_offset_slow(image1, image2, shape1=None, shape2=None, fft1=None, fft2=None, num_peaks=4, max_peaks=4, score_threshold=0.1):
     if type(image1) == str:
         image1 = skimage.io.imread(image1)
     if type(image2) == str:
@@ -230,14 +312,21 @@ def calculate_offset(image1, image2, shape1=None, shape2=None, fft1=None, fft2=N
 
     sizeY, sizeX = max(image1.shape[0], image2.shape[0]), max(image1.shape[1], image2.shape[1])
 
+    times = []
+    times.append(time.time())
     if fft1 is None or fft2 is None:
         PCM = pcm(image1, image2).real
     else:
         PCM = pcm_fft(fft1, fft2).real
-    yins, xins, _ = multi_peak_max(PCM)
+    times.append(time.time())
+    yins, xins, vals = multi_peak_max(PCM)
     del PCM
+    #print (vals[:5])
+    times.append(time.time())
     max_peak = interpret_translation(orig_image1, orig_image2, yins, xins, -sizeY, sizeY, -sizeX, sizeX,
                     num_peaks=num_peaks, max_peaks=max_peaks, ncc_threshold=score_threshold)
+    times.append(time.time())
+    #print ([end - start for start, end in zip(times, times[1:])])
     return max_peak
 
 def score_offset(image1, image2, dx, dy):
@@ -252,3 +341,4 @@ def score_offset(image1, image2, dx, dy):
     ncc_val = ncc(subI1, subI2)
     return ncc_val
     
+
