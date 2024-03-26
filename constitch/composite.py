@@ -451,6 +451,27 @@ class CompositeImage:
         mask = [(i,j) not in self.constraints for i,j in pairs]
         return pairs[mask]
 
+    def prune_pairs(self, pairs):
+        pass
+
+    def test_pairs(self, pairs, scale=16):
+        """ Estimates the constraints between the given pairs with scaled down images, and
+        removes any that don't seem to have any overlap. Useful when microscope positions are
+        not very accurate and you need to expand the search space, as this will avoid fully calculating extra
+        contraints
+
+            scale: factor to downscale images, 16 is a good balance between speed and accuracy.
+        """
+        composite = CompositeImage(precalculate_fft=True, debug=self.debug, progress=self.progress)
+        images = [skimage.transform.rescale(image, 1/scale) for image in self.images]
+        composite.add_images(images, self.boxes.pos1 // scale)
+
+        composite.calc_constraints(pairs)
+        composite.filter_constraints()
+        composite.filter_outliers()
+
+        return composite.constraints.keys()
+
     def calc_constraints(self, pairs=None, return_constraints=False, debug=True):
         """ Estimates the pairwise translations of images and add thems as constraints
         in the montage
