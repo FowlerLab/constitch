@@ -230,7 +230,7 @@ def find_peaks(fft, image1, image2, num_peaks):
         section2 = section2[:dim1,:dim2]
         if section1.size == 0: continue
 
-        peak = (ncc2(section1, section2), xval, yval)
+        peak = (ncc(section1, section2), xval, yval)
 
         if peak[0] > best_peak[0]:
             best_peak = peak

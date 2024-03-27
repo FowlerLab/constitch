@@ -463,12 +463,18 @@ class CompositeImage:
             scale: factor to downscale images, 16 is a good balance between speed and accuracy.
         """
         composite = CompositeImage(precalculate_fft=True, debug=self.debug, progress=self.progress)
-        images = [skimage.transform.rescale(image, 1/scale) for image in self.images]
+        self.debug('got composite')
+        images = [skimage.transform.rescale(image, 1/scale) for image in self.progress(self.images)]
+        self.debug('scaled images')
         composite.add_images(images, self.boxes.pos1 // scale)
+        self.debug('put in images')
 
         composite.calc_constraints(pairs)
+        self.debug('cacled constraints')
         composite.filter_constraints()
+        self.debug('filtered')
         composite.filter_outliers()
+        self.debug('filtered out')
 
         return composite.constraints.keys()
 
@@ -869,6 +875,11 @@ class CompositeImage:
 
         self.debug("Solved", len(self.constraints), "constraints, with error: min {} max".format(
                 np.percentile(diffs, (0,1,5,50,95,99,100)).astype(int)))
+
+        if diffs.max() > 50:
+            warnings.warn(("Final solution has some constraints that are off by more than 50px. "
+                    "This usually means that some erronious constraints were still present before "
+                    "solving. Make sure you performed all proper filtering steps before solving."))
 
         if apply_positions:
             for i, box in enumerate(self.boxes):
