@@ -373,7 +373,8 @@ class CompositeImage:
         )
 
         composite.images = [self.images[i] for i in indices]
-        composite.boxes = [self.boxes[i] for i in indices]
+        #composite.boxes = [self.boxes[i] for i in indices]
+        composite.boxes = BBoxList(self.boxes.pos1[indices], self.boxes.pos2[indices])
         if self.precalculate_fft:
             composite.ffts = [self.ffts[i] for i in indices]
 
@@ -962,6 +963,13 @@ class CompositeImage:
             if np.any(pos2 - pos1 != image.shape[:2]):
                 warnings.warn("resizing some images")
                 image = skimage.transform.resize(image, pos2 - pos1)
+            
+            pos1 = np.maximum(0, np.minimum(pos1, maxes - mins))
+            pos2 = np.maximum(0, np.minimum(pos2, maxes - mins))
+            image = image[max(0,-pos1[0]):,max(0,-pos1[1])]
+            image = image[:pos2[0]-pos1[0],:pos2[1]-pos1[1]]
+            if image.size == 0: continue
+            self.debug(image.shape, pos1, pos2, mins, maxes)
 
             position = (slice(pos1[0], pos2[0]), slice(pos1[1], pos2[1]))
             merger.add_image(image, position)
