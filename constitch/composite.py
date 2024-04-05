@@ -926,19 +926,18 @@ class CompositeImage:
         if keep_zero:
             mins = 0
 
+        self.debug(mins, maxes)
         start_mins = np.array(self.boxes[0].pos1[:2])
         start_maxes = np.array(self.boxes[0].pos2[:2])
+        self.debug(start_mins, start_maxes)
         
         if mins is not None:
             start_mins[:] = mins
         if maxes is not None:
             start_maxes[:] = maxes
+        self.debug(start_mins, start_maxes)
 
         mins, maxes = start_mins, start_maxes
-
-        for i in indices:
-            mins = np.minimum(mins, self.boxes[i].pos1[:2])
-            maxes = np.maximum(maxes, self.boxes[i].pos2[:2])
 
         self.debug (mins, maxes)
 
@@ -949,6 +948,7 @@ class CompositeImage:
             real_images = self.images
 
         example_image = self.fullimagearr(real_images[0])
+        self.debug(example_image.shape, 'example shape')
         full_shape = tuple((maxes - mins) * self.scale) + example_image.shape[2:]
         merger = merger(full_shape, example_image.dtype)
         if out is not None:
@@ -960,14 +960,22 @@ class CompositeImage:
             pos1 = ((self.boxes[i].pos1[:2] - mins) * self.scale).astype(int)
             pos2 = ((self.boxes[i].pos2[:2] - mins) * self.scale).astype(int)
             image = self.fullimagearr(real_images[i])
+            self.debug(image.shape)
             if np.any(pos2 - pos1 != image.shape[:2]):
+                self.debug(pos1, pos2, pos2 - pos1)
+                self.debug(image.shape)
                 warnings.warn("resizing some images")
                 image = skimage.transform.resize(image, pos2 - pos1)
             
+            self.debug(pos1, pos2, image.shape)
             pos1 = np.maximum(0, np.minimum(pos1, maxes - mins))
             pos2 = np.maximum(0, np.minimum(pos2, maxes - mins))
-            image = image[max(0,-pos1[0]):,max(0,-pos1[1])]
+            self.debug(pos1, pos2, image.shape)
+            image = image[max(0,-pos1[0]):,max(0,-pos1[1]):]
+            self.debug(pos1, pos2, image.shape)
+            self.debug(max(0,-pos1[0]),max(0,-pos1[1]))
             image = image[:pos2[0]-pos1[0],:pos2[1]-pos1[1]]
+            self.debug(pos1, pos2, image.shape)
             if image.size == 0: continue
             self.debug(image.shape, pos1, pos2, mins, maxes)
 

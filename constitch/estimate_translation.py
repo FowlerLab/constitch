@@ -200,7 +200,7 @@ def calc_pcm(fft1, fft2):
     return fft1
 
 @numba.jit(nopython=True)
-def ncc(image1, image2):
+def ncc_fast(image1, image2):
     """Compute the normalized cross correlation for two images.
     """
     mean1, mean2 = image1.mean(), image2.mean()
@@ -255,7 +255,7 @@ def image_diff_sizes(image1, image2):
     return image1, image2
 
 
-def calculate_offset(image1, image2, shape1=None, shape2=None, fft1=None, fft2=None, num_peaks=4):
+def calculate_offset_fast(image1, image2, shape1=None, shape2=None, fft1=None, fft2=None, num_peaks=4):
     if type(image1) == str:
         image1 = skimage.io.imread(image1)
     if type(image2) == str:
@@ -328,6 +328,9 @@ def calculate_offset_slow(image1, image2, shape1=None, shape2=None, fft1=None, f
     times.append(time.time())
     #print ([end - start for start, end in zip(times, times[1:])])
     return max_peak
+
+ncc = ncc_slow
+calculate_offset = calculate_offset_slow
 
 def score_offset(image1, image2, dx, dy):
     if type(image1) == str:
