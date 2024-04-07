@@ -218,24 +218,30 @@ def ncc_fast(image1, image2):
 @numba.jit(nopython=True)
 def find_peaks(fft, image1, image2, num_peaks):
     best_peak = (0,0,0)
+    shape = (max(image1.shape[0], image2.shape[0]), max(image1.shape[1], image2.shape[1]))
     for i in range(num_peaks):
         peak_index = np.argmax(fft, axis=None)
         xval, yval = peak_index // fft.shape[1], peak_index % fft.shape[1]
+        for xval in (xval, shape[0] - xval):
+            for yval in (yval, shape[1] - yval):
+                for xval in (xval, -xval):
+                    for yval in (yval, -yval):
+                        section1 = image1[max(0,xval):,max(0,yval):]
+                        section2 = image2[max(0,-xval):,max(0,-yval):]
+                        dim1 = min(section1.shape[0], section2.shape[0])
+                        dim2 = min(section1.shape[1], section2.shape[1])
+                        section1 = section1[:dim1,:dim2]
+                        section2 = section2[:dim1,:dim2]
+                        if section1.size == 0: continue
 
-        section1 = image1[max(0,xval):,max(0,yval):]
-        section2 = image2[max(0,-xval):,max(0,-yval):]
-        dim1 = min(section1.shape[0], section2.shape[0])
-        dim2 = min(section1.shape[1], section2.shape[1])
-        section1 = section1[:dim1,:dim2]
-        section2 = section2[:dim1,:dim2]
-        if section1.size == 0: continue
+                        peak = (ncc_fast(section1, section2), xval, yval)
 
-        peak = (ncc(section1, section2), xval, yval)
+                        if peak[0] > best_peak[0]:
+                            best_peak = peak
 
-        if peak[0] > best_peak[0]:
-            best_peak = peak
+                if xval < shape[0] and yval < shape[1]:
+                    fft[xval,yval] = 0
 
-        fft.flat[peak_index] = 0
     return best_peak
 
 
