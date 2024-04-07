@@ -300,7 +300,7 @@ class CompositeImage:
         """
         return np.array([box.pos1 for box in self.boxes])
 
-    def merge(self, other_composite, new_layer=False):
+    def merge(self, other_composite, new_layer=False, align_coords=False):
         """ Adds all images and constraints from another montage into this one.
             
             other_composite: CompositeImage
@@ -350,7 +350,34 @@ class CompositeImage:
             self.constraints[(i+start_index,j+start_index)] = Constraint(
                     constraint.score, constraint.dx * scale_conversion, constraint.dy * scale_conversion, constraint.modeled)
 
+        if align_coords:
+            pass
+
         return list(range(start_index, len(self.images)))
+
+    def align_coordinate_space(indices, num_samples=10, search_radius=5, random_state=12345):
+        """ Takes all images specified by indices and makes sure that their coordinate space is consistent
+        with the coordinate space of the composite. If not it is corrected by calculating some
+        pairwise constraints
+        """
+        rng = np.random.default_rng(random_state)
+
+        selected_images = []
+        selected_scores = []
+        for i in rng.shuffle(len(self.images)):
+            if i in indices: continue
+            selected_images.append(i)
+            selected_scores.append(ncc(self.imagearr(self.images[i]), self.imagearr(self.images[i])))
+            if len(selected_images) > num_samples * 2: break
+        
+        #take images that have higher score against themeselvs, means more features for alignment
+        selected_images = np.array(selected_images)[np.argsort(selected_scores)[num_samples:]]
+
+        radius = 1
+        while radius <= search_radius:
+            for index in selected_images:
+                pass
+
 
     def subcomposite(self, indices):
         """ Returns a new composite with a subset of the images and constraints in this one.
