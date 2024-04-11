@@ -125,6 +125,13 @@ class CompositeImage:
         composite.mapping = None
 
     def save(self, path, save_images=True):
+        """ Saves this composite to the given path. Can be restored with the `CompositeImage.load`
+        function.
+
+            save_images: bool, whether the images should be included in the save file. If they are
+                excluded the programmer needs to restore them when loading.
+        """
+
         obj = dict(
             boxes = (self.boxes.pos1, self.boxes.pos2),
             constraints = self.constraints,
@@ -144,6 +151,11 @@ class CompositeImage:
 
     @classmethod
     def load(cls, path, **kwargs):
+        """ Loads a composite previously saved with `CompositeImage.save` to the given
+        path. If the composite was saved without images they should be restored by setting
+        composite.images to a list of the images.
+        """
+            
         obj = pickle.load(open(path, 'rb'))
         params = dict(
             precalculate_fft = obj.pop('precalculate_fft'),
@@ -256,7 +268,7 @@ class CompositeImage:
             overlap: float, int or (float or int, float or int)
                 The amount of overlap between neighboring tiles. Zero will result in no overlap,
                 a floating point number represents a percentage of the size of the tile, and an
-                integer number represents a pixel overlap.
+                integer number represents a flat pixel overlap.
         """
         assert num_tiles or tile_shape, "Must specify either num_tiles or tile_shape"
 
@@ -492,21 +504,24 @@ class CompositeImage:
         """
         composite = CompositeImage(precalculate_fft=True, debug=self.debug, progress=self.progress)
         self.debug('got composite')
-        images = [skimage.transform.rescale(image, 1/scale) for image in self.progress(self.images)]
+        #images = [skimage.transform.rescale(image, 1/scale) for image in self.progress(self.images)]
+        images = [skimage.transform.downscale_local_mean(image, scale).astype(image.dtype) for image in self.progress(self.images)]
         self.debug('scaled images')
         composite.add_images(images, self.boxes.pos1 // scale)
         self.debug('put in images')
 
-        composite.calc_constraints(pairs)
+        composite.calc_constraints(pairs, num_peaks=2)
         self.debug('cacled constraints')
         composite.filter_constraints()
         self.debug('filtered')
         composite.filter_outliers()
         self.debug('filtered out')
+        composite.plot_scores('plots/tmp_constraints.png')
+        composite.save('selected_composite.bin', save_images=False)
 
         return composite.constraints.keys()
 
-    def calc_constraints(self, pairs=None, return_constraints=False, debug=True):
+    def calc_constraints(self, pairs=None, return_constraints=False, debug=True, **kwargs):
         """ Estimates the pairwise translations of images and add thems as constraints
         in the montage
 
@@ -538,12 +553,12 @@ class CompositeImage:
                     futures.append(self.executor.submit(calculate_offset,
                             self.images[index1], self.images[index2],
                             self.boxes[index1].size()[:2], self.boxes[index2].size()[:2],
-                            self.ffts[index1], self.ffts[index2]))
+                            self.ffts[index1], self.ffts[index2], **kwargs))
             else:
                 for index1, index2 in pairs:
                     futures.append(self.executor.submit(calculate_offset,
                             self.images[index1], self.images[index2],
-                            self.boxes[index1].size()[:2], self.boxes[index2].size()[:2]))
+                            self.boxes[index1].size()[:2], self.boxes[index2].size()[:2], **kwargs))
 
             for (index1, index2), future in self.progress(zip(pairs, futures), total=len(futures)):
                 score, dx, dy = future.result()
@@ -553,12 +568,12 @@ class CompositeImage:
                 for index1, index2 in self.progress(pairs):
                     score, dx, dy = calculate_offset(self.images[index1], self.images[index2],
                             self.boxes[index1].size()[:2], self.boxes[index2].size()[:2],
-                            self.ffts[index1], self.ffts[index2])
+                            self.ffts[index1], self.ffts[index2], **kwargs)
                     constraints[(index1,index2)] = Constraint(score, dx, dy)
             else:
                 for index1, index2 in self.progress(pairs):
                     score, dx, dy = calculate_offset(self.images[index1], self.images[index2],
-                            self.boxes[index1].size()[:2], self.boxes[index2].size()[:2])
+                            self.boxes[index1].size()[:2], self.boxes[index2].size()[:2], **kwargs)
                     constraints[(index1,index2)] = Constraint(score, dx, dy)
 
         if debug and len(constraints) != 0:
@@ -604,6 +619,10 @@ class CompositeImage:
 
         fake_consts = self.calc_constraints(fake_pairs, return_constraints=True, debug=False).values()
         scores = np.array([const.score for const in real_consts] + [const.score for const in fake_consts])
+
+        thresh = max(const.score for const in fake_consts)
+        print (thresh, 'thresh')
+        return thresh
 
         #fig, axis = plt.subplots()
         #axis.hist(scores[:len(real_consts)], bins=15, alpha=0.5)
@@ -841,23 +860,7 @@ class CompositeImage:
 
         return np.array(scores)
 
-    def solve_constraints(self, apply_positions=True, filter_outliers=False):
-        """ Solves all contained constraints to get absolute image positions.
-
-        This is done by constructing a set of linear equations, with every constraint
-        being an equation of the positions of the two images.
-        Scores are incorporated by multiplying the whole equation by the score value,
-        as the solution with the least squared error is found, prioritizing solution
-        that use highly scored constraints.
-
-        Args:
-            apply_positions: (bool)
-                Whether the solved positions should be applied to the images in the composite.
-                If True the current image positions are overwritten.
-
-            Returns: np.ndarray shape (len(images), n_dims)
-                The solved positions of images.
-        """
+    def make_constraint_matrix(self):
         solution_mat = np.zeros((len(self.constraints)*2+2, len(self.images)*2))
         solution_vals = np.zeros(len(self.constraints)*2+2)
         
@@ -879,16 +882,66 @@ class CompositeImage:
         solution_mat[-2, 0] = 1
         solution_mat[-1, 1] = 1
 
+        return solution_mat, solution_vals
+
+    def solve_constraints(self, apply_positions=True, filter_outliers=False, outlier_threshold=5):
+        """ Solves all contained constraints to get absolute image positions.
+
+        This is done by constructing a set of linear equations, with every constraint
+        being an equation of the positions of the two images.
+        Scores are incorporated by multiplying the whole equation by the score value,
+        as the solution with the least squared error is found, prioritizing solution
+        that use highly scored constraints.
+
+        Args:
+            apply_positions: (bool)
+                Whether the solved positions should be applied to the images in the composite.
+                If True the current image positions are overwritten.
+
+            Returns: np.ndarray shape (len(images), n_dims)
+                The solved positions of images.
+        """
+
+
         if filter_outliers:
             print ('outlier')
-            model = sklearn.linear_model.RANSACRegressor().fit(solution_mat, solution_vals)
-            solution = model.extimator_.coefs_
-            constraint_pairs = list(self.constraints.keys())
-            for i in np.argwhere(~model.inlier_mask_).flatten():
-                del self.constraints[constraint_pairs[i]]
-            print (model.inlier_mask_)
-            print (np.sum(model.inlier_mask_), len(model.inlier_mask_))
+
+            while True:
+                solution_mat, solution_vals = self.make_constraint_matrix()
+                solution, residuals, rank, sing = np.linalg.lstsq(solution_mat, solution_vals, rcond=None)
+                poses = solution.reshape(-1,2)
+
+                max_consts = {}
+                dists = []
+                for index, ((id1, id2), constraint) in enumerate(self.constraints.items()):
+                    new_offset = poses[id2] - poses[id1]
+                    diff = (new_offset[0] - constraint.dx, new_offset[1] - constraint.dy)
+                    dist = np.sqrt(diff[0] * diff[0] + diff[1] * diff[1])
+                    dists.append(dist)
+                    
+                    if max_consts.get(id1, (0,0))[0] < dist:
+                        max_consts[id1] = (dist, (id1, id2))
+                    if max_consts.get(id2, (0,0))[0] < dist:
+                        max_consts[id2] = (dist, (id1, id2))
+                    
+                dists = np.array(dists)
+                
+                self.debug('dists', np.percentile(dists, (0,1,5,50,95,99,100)).astype(int))
+
+                max_dist = dists.max()
+                if max_dist < outlier_threshold:
+                    break
+
+                self.debug ('before filter', len(self.constraints))
+                for dist, (id1, id2) in max_consts.values():
+                    if dist >= max(outlier_threshold, max_dist * 0.2) and dist >= max_consts[id1][0] and dist >= max_consts[id1][0]:
+                        if (id1, id2) in self.constraints:
+                            self.debug ('del', id1, id2)
+                            del self.constraints[(id1, id2)]
+                self.debug ('after filter', len(self.constraints))
+
         else:
+            solution_mat, solution_vals = self.make_constraint_matrix()
             solution, residuals, rank, sing = np.linalg.lstsq(solution_mat, solution_vals, rcond=None)
 
         poses = np.round(solution.reshape(-1,2)).astype(int)

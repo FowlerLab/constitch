@@ -5,6 +5,43 @@ import itertools
 
 import numba
 
+
+class Aligner:
+    def precalculate(self, image):
+        pass
+
+    def align(self, image1, image2, precalc1=None, precalc2=None):
+        pass
+
+
+
+class FFTAligner:
+    def __init__(self, num_peaks=2):
+        self.num_peaks = num_peaks
+
+    def precalculate(self, image):
+        return np.fft.fft2(image)
+
+    def align(self, image1, image2, precalc1=None, precalc2=None):
+        return calculate_offset_fast(image1, image2, fft1=precalc2, fft2=precalc2, num_peaks=self.num_peaks)
+
+
+class FeatureAligner:
+    def __init__(self, num_features=100):
+        self.num_features = num_features
+
+    def precalculate(self, image):
+        pass
+
+
+
+
+
+
+
+
+
+
 def pcm(image1, image2):
     """Compute peak correlation matrix for two images.
     """
@@ -261,7 +298,7 @@ def image_diff_sizes(image1, image2):
     return image1, image2
 
 
-def calculate_offset_fast(image1, image2, shape1=None, shape2=None, fft1=None, fft2=None, num_peaks=4):
+def calculate_offset_fast(image1, image2, shape1=None, shape2=None, fft1=None, fft2=None, num_peaks=2):
     if type(image1) == str:
         image1 = skimage.io.imread(image1)
     if type(image2) == str:
@@ -296,7 +333,7 @@ def calculate_offset_fast(image1, image2, shape1=None, shape2=None, fft1=None, f
     return best_peak
 
 
-def calculate_offset_slow(image1, image2, shape1=None, shape2=None, fft1=None, fft2=None, num_peaks=4, max_peaks=4, score_threshold=0.1):
+def calculate_offset_slow(image1, image2, shape1=None, shape2=None, fft1=None, fft2=None, num_peaks=2, max_peaks=2, score_threshold=0.1):
     if type(image1) == str:
         image1 = skimage.io.imread(image1)
     if type(image2) == str:
