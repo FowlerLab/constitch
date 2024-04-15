@@ -6,6 +6,7 @@ import numpy as np
 import matplotlib.pyplot as plt
 import skimage.filters
 import sklearn.linear_model
+import concurrent.futures
 import sklearn.mixture
 import imageio.v3 as iio
 import warnings
@@ -91,8 +92,16 @@ class BBoxList:
         return "BBoxList(pos1={}, pos2={})".format(self.pos1, self.pos2)
 
 
+class SequentialExecutor(concurrent.futures.Executor):
+    def submit(self, func, *args, **kwargs):
+        result = func(*args, **kwargs)
+        future = concurrent.futures.Future()
+        future.set_result(result)
+        return future
+
+
 class CompositeImage:
-    def __init__(self, precalculate_fft=False, debug=True, progress=False, executor=None):
+    def __init__(self, aligner=None, precalculate=False, debug=True, progress=False, executor=None):
         self.images = []
         self.greyimages = []
         self.boxes = BBoxList()
@@ -100,11 +109,13 @@ class CompositeImage:
         self.scale = 1
         self.stage_model = None
         self.set_logging(debug, progress)
+        self.set_executor(executor)
         self.executor = executor
 
-        self.precalculate_fft = precalculate_fft
-        if precalculate_fft:
-            self.ffts = []
+        self.aligner = aligner or estimate_translation.FFTAligner()
+
+    def set_executor(self, executor):
+        self.executor = executor or SequentialExecutor()
 
     def set_logging(self, debug=True, progress=False):
         self.debug, self.progress = utils.log_env(debug, progress)
@@ -247,13 +258,6 @@ class CompositeImage:
         
         self.images.extend(images)
 
-        if self.precalculate_fft:
-            self.debug("Precalculating ffts of", len(images), "images")
-            if self.executor is not None:
-                self.ffts.extend(self.progress(self.executor.map(fft_job, images), total=len(images)))
-            else:
-                self.ffts.extend(self.progress(map(fft_job, images), total=len(images)))
-
     def add_split_image(self, image, num_tiles=None, tile_shape=None, overlap=0.1):
         """ Adds an image split into a number of tiles
 
@@ -349,15 +353,6 @@ class CompositeImage:
             for box in other_composite.boxes:
                 self.boxes.append(BBox(box.pos1 * scale_conversion, box.pos2 * scale_conversion))
 
-        if self.precalculate_fft:
-            if other_composite.precalculate_fft:
-                self.ffts.extend(other_composite.ffts)
-            else:
-                if self.executor is not None:
-                    self.ffts.extend(self.progress(self.executor.map(np.fft.fft2, other_composite.images), total=len(other_composite.images)))
-                else:
-                    self.ffts.extend(self.progress(map(np.fft.fft2, other_composite.images), total=len(other_composite.images)))
-
         for (i,j), constraint in other_composite.constraints.items():
             self.constraints[(i+start_index,j+start_index)] = Constraint(
                     constraint.score, constraint.dx * scale_conversion, constraint.dy * scale_conversion, constraint.modeled)
@@ -405,7 +400,7 @@ class CompositeImage:
             indices = [i for i in range(len(indices)) if indices[i]]
 
         composite = type(self)(
-            precalculate_fft = self.precalculate_fft,
+            aligner = self.aligner,
             executor = self.executor,
             debug = self.debug,
             progress = self.progress,
@@ -414,8 +409,6 @@ class CompositeImage:
         composite.images = [self.images[i] for i in indices]
         #composite.boxes = [self.boxes[i] for i in indices]
         composite.boxes = BBoxList(self.boxes.pos1[indices], self.boxes.pos2[indices])
-        if self.precalculate_fft:
-            composite.ffts = [self.ffts[i] for i in indices]
 
         for (i,j), constraint in self.constraints.items():
             if i in indices and j in indices:
@@ -502,7 +495,7 @@ class CompositeImage:
 
             scale: factor to downscale images, 16 is a good balance between speed and accuracy.
         """
-        composite = CompositeImage(precalculate_fft=True, debug=self.debug, progress=self.progress)
+        composite = CompositeImage(debug=self.debug, progress=self.progress)
         self.debug('got composite')
         #images = [skimage.transform.rescale(image, 1/scale) for image in self.progress(self.images)]
         images = [skimage.transform.downscale_local_mean(image, scale).astype(image.dtype) for image in self.progress(self.images)]
@@ -521,7 +514,7 @@ class CompositeImage:
 
         return composite.constraints.keys()
 
-    def calc_constraints(self, pairs=None, return_constraints=False, debug=True, **kwargs):
+    def calc_constraints(self, pairs=None, precalculate=False, return_constraints=False, debug=True, **kwargs):
         """ Estimates the pairwise translations of images and add thems as constraints
         in the montage
 
@@ -533,6 +526,12 @@ class CompositeImage:
                 `CompositeImage.find_unconstrained_pairs` for more info.
                 Important: the pairs given are not checked for overlap, so invalid
                 constraints could be generated if specific indices are passed in.
+
+            precalculate (bool): default false
+                Most methods of alignments have some calculation that happens per image
+                and some that is per image pair, so this flag means that the per image
+                calculations will happen first and only once for each image. This will
+                improve speed at the expense of memory.
 
             return_constraints (bool): default False,
                 If true returns constraints instead of adding them to the montage
@@ -546,35 +545,23 @@ class CompositeImage:
 
         constraints = {}
 
-        if self.executor is not None:
-            futures = []
-            if self.precalculate_fft:
-                for index1, index2 in pairs:
-                    futures.append(self.executor.submit(calculate_offset,
-                            self.images[index1], self.images[index2],
-                            self.boxes[index1].size()[:2], self.boxes[index2].size()[:2],
-                            self.ffts[index1], self.ffts[index2], **kwargs))
-            else:
-                for index1, index2 in pairs:
-                    futures.append(self.executor.submit(calculate_offset,
-                            self.images[index1], self.images[index2],
-                            self.boxes[index1].size()[:2], self.boxes[index2].size()[:2], **kwargs))
-
-            for (index1, index2), future in self.progress(zip(pairs, futures), total=len(futures)):
-                score, dx, dy = future.result()
-                constraints[(index1,index2)] = Constraint(score, dx, dy)
+        if precalculate:
+            precalcs = [self.executor.submit(precalc_job, aligner=aligner, image=image) for image in self.images]
+            precalcs = [future.result() for future in self.progress(precalcs)]
         else:
-            if self.precalculate_fft:
-                for index1, index2 in self.progress(pairs):
-                    score, dx, dy = calculate_offset(self.images[index1], self.images[index2],
-                            self.boxes[index1].size()[:2], self.boxes[index2].size()[:2],
-                            self.ffts[index1], self.ffts[index2], **kwargs)
-                    constraints[(index1,index2)] = Constraint(score, dx, dy)
-            else:
-                for index1, index2 in self.progress(pairs):
-                    score, dx, dy = calculate_offset(self.images[index1], self.images[index2],
-                            self.boxes[index1].size()[:2], self.boxes[index2].size()[:2], **kwargs)
-                    constraints[(index1,index2)] = Constraint(score, dx, dy)
+            precalcs = [None] * len(self.images)
+
+        futures = []
+        for index1, index2 in pairs:
+            futures.append(self.executor.submit(align_job,
+                aligner = self.aligner,
+                image1 = self.images[index1], image2 = self.images[index2],
+                precalc1 = precalcs[index1], precalc2 = precalcs[index2],
+            ))
+
+        for (index1, index2), future in self.progress(zip(pairs, futures), total=len(futures)):
+            score, dx, dy = future.result()
+            constraints[(index1,index2)] = Constraint(score, dx, dy)
 
         if debug and len(constraints) != 0:
             scores = np.array([const.score for const in constraints.values()])
@@ -1187,8 +1174,9 @@ class CompositeImage:
         return np.sqrt(diff[0]*diff[0] + diff[1]*diff[1])
 
 
-def fft_job(image):
-    if type(image) == str:
-        image = iio.imread(image)
-    return np.fft.fft2(image)
+def align_job(aligner, image1, image2, precalc1=None, precalc2=None):
+    return aligner.align(image1=image1, image2=image2, precalc1=precalc1, precalc2=precalc2)
+
+def precalc_job(aligner, image):
+    return aligner.precalculate(image)
 
