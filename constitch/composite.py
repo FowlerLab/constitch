@@ -13,7 +13,7 @@ import warnings
 
 from .estimate_translation import calculate_offset, score_offset
 from .stage_model import SimpleOffsetModel, GlobalStageModel
-from . import merging
+from . import merging, estimate_translation
 from .. import utils
 
 
@@ -113,6 +113,7 @@ class CompositeImage:
         self.executor = executor
 
         self.aligner = aligner or estimate_translation.FFTAligner()
+        self.precalculate = precalculate
 
     def set_executor(self, executor):
         self.executor = executor or SequentialExecutor()
@@ -123,10 +124,6 @@ class CompositeImage:
     def print_mem_usage(self):
         mem_images = sum((image.nbytes if type(image) == np.ndarray else 0) for image in self.images)
         self.debug("Using {} bytes ({}) for images".format(mem_images, utils.human_readable(mem_images)))
-        if self.precalculate_fft:
-            mem_ffts = sum(image.nbytes for image in self.ffts)
-            self.debug("Using {} bytes ({}) for ffts".format(mem_ffts, utils.human_readable(mem_ffts)))
-            mem_images += mem_ffts
         self.debug("Total: {} ({})".format(mem_images, utils.human_readable(mem_images)))
 
     @classmethod
@@ -150,7 +147,6 @@ class CompositeImage:
             stage_model = self.stage_model,
             debug = bool(self.debug),
             progress = bool(self.progress),
-            precalculate_fft = self.precalculate_fft,
         )
         if save_images:
             obj['images'] = self.images
@@ -169,7 +165,6 @@ class CompositeImage:
             
         obj = pickle.load(open(path, 'rb'))
         params = dict(
-            precalculate_fft = obj.pop('precalculate_fft'),
             debug = obj.pop('debug'),
             progress = obj.pop('progress'),
         )
