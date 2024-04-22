@@ -989,8 +989,8 @@ class CompositeImage:
             mins = 0
 
         self.debug(mins, maxes)
-        start_mins = np.array(self.boxes[0].pos1[:2])
-        start_maxes = np.array(self.boxes[0].pos2[:2])
+        start_mins = np.array(self.boxes.pos1.min(axis=0)[:2])
+        start_maxes = np.array(self.boxes.pos2.max(axis=0)[:2])
         self.debug(start_mins, start_maxes)
         
         if mins is not None:
