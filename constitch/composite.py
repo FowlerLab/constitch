@@ -875,7 +875,7 @@ class CompositeImage:
 
         return solution_mat, solution_vals
 
-    def solve_constraints(self, apply_positions=True, filter_outliers=False, outlier_threshold=5):
+    def solve_constraints(self, apply_positions=True, filter_outliers=False, outlier_threshold=5, ignore_bad_constraints=False):
         """ Solves all contained constraints to get absolute image positions.
 
         This is done by constructing a set of linear equations, with every constraint
@@ -949,9 +949,14 @@ class CompositeImage:
                 np.percentile(diffs, (0,1,5,50,95,99,100)).astype(int)))
 
         if diffs.max() > 50:
-            warnings.warn(("Final solution has some constraints that are off by more than 50px. "
-                    "This usually means that some erronious constraints were still present before "
-                    "solving. Make sure you performed all proper filtering steps before solving."))
+            if ignore_bad_constraints:
+                warnings.warn(("Final solution has some constraints that are off by more than 50px. "
+                        "This usually means that some erronious constraints were still present before "
+                        "solving. Make sure you performed all proper filtering steps before solving."))
+            else:
+                raise ValueError(("Final solution has some constraints that are off by more than 50px. "
+                        "This usually means that some erronious constraints were still present before "
+                        "solving. Make sure you performed all proper filtering steps before solving."))
 
         if apply_positions:
             for i, box in enumerate(self.boxes):
@@ -998,8 +1003,8 @@ class CompositeImage:
             mins = 0
 
         self.debug(mins, maxes)
-        start_mins = np.array(self.boxes[0].pos1[:2])
-        start_maxes = np.array(self.boxes[0].pos2[:2])
+        start_mins = np.array(self.boxes.pos1.min(axis=0)[:2])
+        start_maxes = np.array(self.boxes.pos2.max(axis=0)[:2])
         self.debug(start_mins, start_maxes)
         
         if mins is not None:
