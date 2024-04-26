@@ -263,11 +263,14 @@ class CompositeImage:
                 should be specified.
             tile_shape: (int, int)
                 The shape of the resulting tiles, if num_tiles isn't specified the maximum
-                number of tiles that fit in the image are extracted.
+                number of tiles that fit in the image are extracted. Whether specified or not,
+                the size of all tiles created is guaranteed to be uniform.
             overlap: float, int or (float or int, float or int)
                 The amount of overlap between neighboring tiles. Zero will result in no overlap,
                 a floating point number represents a percentage of the size of the tile, and an
-                integer number represents a flat pixel overlap.
+                integer number represents a flat pixel overlap. The overlap is treated as a lower bound,
+                as it is not always possible to get the exact overlap requested due to rounding issues,
+                and in some cases more overlap will exist between some tiles
         """
         assert num_tiles or tile_shape, "Must specify either num_tiles or tile_shape"
 
@@ -279,32 +282,38 @@ class CompositeImage:
         if num_tiles:
             if type(overlap[0]) == float:
                 tile_offset = (
-                    int(image.shape[0] // (num_tiles[0] + overlap[0])),
-                    int(image.shape[1] // (num_tiles[1] + overlap[1])),
+                    #int(image.shape[0] // (num_tiles[0] + overlap[0])),
+                    #int(image.shape[1] // (num_tiles[1] + overlap[1])),
+                    image.shape[0] / (num_tiles[0] + overlap[0]),
+                    image.shape[1] / (num_tiles[1] + overlap[1]),
                 )
-                overlap = int(tile_offset[0] * overlap[0]), int(tile_offset[1] * overlap[1])
+                overlap = tile_offset[0] * overlap[0], tile_offset[1] * overlap[1]
             else:
                 tile_offset = (
-                    int((image.shape[0] - overlap[0]) // num_tiles[0]),
-                    int((image.shape[1] - overlap[1]) // num_tiles[1]),
+                    #int((image.shape[0] - overlap[0]) // num_tiles[0]),
+                    #int((image.shape[1] - overlap[1]) // num_tiles[1]),
+                    (image.shape[0] - overlap[0]) / num_tiles[0],
+                    (image.shape[1] - overlap[1]) / num_tiles[1],
                 )
-            tile_shape = tile_offset[0] + overlap[0], tile_offset[1] + overlap[1]
+            tile_shape = math.ceil(tile_offset[0] + overlap[0]), math.ceil(tile_offset[1] + overlap[1])
         else:
             if type(overlap[0]) == float:
-                overlap = int(tile_shape[0] * overlap[0]), int(tile_shape[1] * overlap[1])
+                overlap = tile_shape[0] * overlap[0], tile_shape[1] * overlap[1]
             tile_offset = tile_shape[0] - overlap[0], tile_shape[1] - overlap[1]
-            num_tiles = (image.shape[0] - overlap[0]) // tile_offset[0], (image.shape[1] - overlap[1]) // tile_offset[1]
+            num_tiles = math.ceil((image.shape[0] - overlap[0]) / tile_offset[0]), math.ceil((image.shape[1] - overlap[1]) / tile_offset[1])
 
         images = []
         positions = []
-        for xpos in range(0, tile_offset[0] * num_tiles[0], tile_offset[0]):
-            for ypos in range(0, tile_offset[1] * num_tiles[1], tile_offset[1]):
+        for xpos in np.linspace(0, image.shape[0] - tile_shape[0], num_tiles[0]):
+            for ypos in np.linspace(0, image.shape[1] - tile_shape[1], num_tiles[1]):
+        #for xpos in range(0, tile_offset[0] * num_tiles[0], tile_offset[0]):
+            #for ypos in range(0, tile_offset[1] * num_tiles[1], tile_offset[1]):
+                xpos, ypos = round(xpos), round(ypos)
                 images.append(image[xpos:xpos+tile_shape[0],ypos:ypos+tile_shape[1]])
                 positions.append((xpos, ypos))
 
         print (positions)
         self.add_images(images, positions)
-        print (self.boxes)
     
     def image_positions():
         """ Returns the positions of all images in pixel values
@@ -1022,23 +1031,27 @@ class CompositeImage:
             pos1 = ((self.boxes[i].pos1[:2] - mins) * self.scale).astype(int)
             pos2 = ((self.boxes[i].pos2[:2] - mins) * self.scale).astype(int)
             image = self.fullimagearr(real_images[i])
-            self.debug(image.shape)
+            #self.debug(image.shape)
             if np.any(pos2 - pos1 != image.shape[:2]):
                 self.debug(pos1, pos2, pos2 - pos1)
                 self.debug(image.shape)
                 warnings.warn("resizing some images")
                 image = skimage.transform.resize(image, pos2 - pos1)
             
-            self.debug(pos1, pos2, image.shape)
+            image = image[max(0,-pos1[0]):,max(0,-pos1[1]):]
+            #self.debug(pos1, pos2, image.shape)
             pos1 = np.maximum(0, np.minimum(pos1, maxes - mins))
             pos2 = np.maximum(0, np.minimum(pos2, maxes - mins))
-            self.debug(pos1, pos2, image.shape)
-            image = image[max(0,-pos1[0]):,max(0,-pos1[1]):]
-            self.debug(pos1, pos2, image.shape)
-            self.debug(max(0,-pos1[0]),max(0,-pos1[1]))
+            #self.debug(pos1, pos2, image.shape)
+            #image = image[max(0,-pos1[0]):,max(0,-pos1[1]):]
+            #self.debug(pos1, pos2, image.shape)
+            #self.debug(max(0,-pos1[0]),max(0,-pos1[1]))
             image = image[:pos2[0]-pos1[0],:pos2[1]-pos1[1]]
-            self.debug(pos1, pos2, image.shape)
+            #self.debug(pos1, pos2, image.shape)
             if image.size == 0: continue
+            self.debug(self.boxes[i])
+            self.debug((self.boxes[i].pos1[:2] - mins) * self.scale)
+            self.debug((self.boxes[i].pos2[:2] - mins) * self.scale)
             self.debug(image.shape, pos1, pos2, mins, maxes)
 
             position = (slice(pos1[0], pos2[0]), slice(pos1[1], pos2[1]))
