@@ -896,6 +896,7 @@ class CompositeImage:
 
         if filter_outliers:
             print ('outlier')
+            starting_len = len(self.constraints)
 
             while True:
                 solution_mat, solution_vals = self.make_constraint_matrix()
@@ -920,7 +921,7 @@ class CompositeImage:
                 self.debug('dists', np.percentile(dists, (0,1,5,50,95,99,100)).astype(int))
 
                 max_dist = dists.max()
-                if max_dist < outlier_threshold:
+                if max_dist < outlier_threshold or len(self.constraints) < starting_len * 0.9:
                     break
 
                 self.debug ('before filter', len(self.constraints))
