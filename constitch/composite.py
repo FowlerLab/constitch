@@ -110,7 +110,6 @@ class CompositeImage:
         self.stage_model = None
         self.set_logging(debug, progress)
         self.set_executor(executor)
-        self.executor = executor
 
         self.aligner = aligner or estimate_translation.FFTAligner()
         self.precalculate = precalculate
@@ -507,13 +506,13 @@ class CompositeImage:
         composite.add_images(images, self.boxes.pos1 // scale)
         self.debug('put in images')
 
-        composite.calc_constraints(pairs, num_peaks=2)
+        composite.calc_constraints(pairs, precalculate=True, num_peaks=2)
         self.debug('cacled constraints')
         composite.filter_constraints()
         self.debug('filtered')
         composite.filter_outliers()
         self.debug('filtered out')
-        composite.plot_scores('plots/tmp_constraints.png')
+        #composite.plot_scores('plots/tmp_constraints.png')
         composite.save('selected_composite.bin', save_images=False)
 
         return composite.constraints.keys()
@@ -550,7 +549,8 @@ class CompositeImage:
         constraints = {}
 
         if precalculate:
-            precalcs = [self.executor.submit(precalc_job, aligner=aligner, image=image) for image in self.images]
+            precalcs = [self.executor.submit(precalc_job, aligner=self.aligner, image=image, shape=box.size()[:2])
+                        for image,box in zip(self.images, self.boxes)]
             precalcs = [future.result() for future in self.progress(precalcs)]
         else:
             precalcs = [None] * len(self.images)
@@ -561,6 +561,7 @@ class CompositeImage:
                 aligner = self.aligner,
                 image1 = self.images[index1], image2 = self.images[index2],
                 precalc1 = precalcs[index1], precalc2 = precalcs[index2],
+                shape1 = self.boxes[index1].size()[:2], shape2 = self.boxes[index2].size()[:2],
             ))
 
         for (index1, index2), future in self.progress(zip(pairs, futures), total=len(futures)):
@@ -611,9 +612,9 @@ class CompositeImage:
         fake_consts = self.calc_constraints(fake_pairs, return_constraints=True, debug=False).values()
         scores = np.array([const.score for const in real_consts] + [const.score for const in fake_consts])
 
-        thresh = max(const.score for const in fake_consts)
-        print (thresh, 'thresh')
-        return thresh
+        #thresh = max(const.score for const in fake_consts)
+        #print (thresh, 'thresh')
+        #return thresh
 
         #fig, axis = plt.subplots()
         #axis.hist(scores[:len(real_consts)], bins=15, alpha=0.5)
@@ -851,11 +852,13 @@ class CompositeImage:
 
         return np.array(scores)
 
-    def make_constraint_matrix(self):
-        solution_mat = np.zeros((len(self.constraints)*2+2, len(self.images)*2))
-        solution_vals = np.zeros(len(self.constraints)*2+2)
+    def make_constraint_matrix(self, constraints=None):
+        constraints = constraints or self.constraints
+
+        solution_mat = np.zeros((len(constraints)*2+2, len(self.images)*2))
+        solution_vals = np.zeros(len(constraints)*2+2)
         
-        for index, ((id1, id2), constraint) in enumerate(self.constraints.items()):
+        for index, ((id1, id2), constraint) in enumerate(constraints.items()):
             dx, dy = constraint.dx, constraint.dy
             score = max(0, constraint.score)
             score = constraint.score * constraint.score
@@ -875,7 +878,7 @@ class CompositeImage:
 
         return solution_mat, solution_vals
 
-    def solve_constraints(self, apply_positions=True, filter_outliers=False, outlier_threshold=5, ignore_bad_constraints=False):
+    def solve_constraints(self, apply_positions=True, filter_outliers=False, max_outlier_ratio=0.9, outlier_threshold=5, ignore_bad_constraints=False):
         """ Solves all contained constraints to get absolute image positions.
 
         This is done by constructing a set of linear equations, with every constraint
@@ -896,16 +899,16 @@ class CompositeImage:
 
         if filter_outliers:
             print ('outlier')
-            starting_len = len(self.constraints)
+            constraints = self.constraints.copy()
 
             while True:
-                solution_mat, solution_vals = self.make_constraint_matrix()
+                solution_mat, solution_vals = self.make_constraint_matrix(constraints)
                 solution, residuals, rank, sing = np.linalg.lstsq(solution_mat, solution_vals, rcond=None)
                 poses = solution.reshape(-1,2)
 
                 max_consts = {}
                 dists = []
-                for index, ((id1, id2), constraint) in enumerate(self.constraints.items()):
+                for index, ((id1, id2), constraint) in enumerate(constraints.items()):
                     new_offset = poses[id2] - poses[id1]
                     diff = (new_offset[0] - constraint.dx, new_offset[1] - constraint.dy)
                     dist = np.sqrt(diff[0] * diff[0] + diff[1] * diff[1])
@@ -921,16 +924,20 @@ class CompositeImage:
                 self.debug('dists', np.percentile(dists, (0,1,5,50,95,99,100)).astype(int))
 
                 max_dist = dists.max()
-                if max_dist < outlier_threshold or len(self.constraints) < starting_len * 0.9:
+                if max_dist < outlier_threshold:
+                    self.constraints = constraints
                     break
 
-                self.debug ('before filter', len(self.constraints))
+                if len(constraints) < len(self.constraints) * max_outlier_ratio:
+                    break
+
+                self.debug ('before filter', len(constraints))
                 for dist, (id1, id2) in max_consts.values():
                     if dist >= max(outlier_threshold, max_dist * 0.2) and dist >= max_consts[id1][0] and dist >= max_consts[id1][0]:
-                        if (id1, id2) in self.constraints:
+                        if (id1, id2) in constraints:
                             self.debug ('del', id1, id2)
-                            del self.constraints[(id1, id2)]
-                self.debug ('after filter', len(self.constraints))
+                            del constraints[(id1, id2)]
+                self.debug ('after filter', len(constraints))
 
         else:
             solution_mat, solution_vals = self.make_constraint_matrix()
@@ -1107,7 +1114,7 @@ class CompositeImage:
                 names.append('(consts z={} -> z={})'.format(pair[0], pair[1]))
 
         axis_size = 12
-        grid_size = int(np.sqrt(len(groups))) + 1
+        grid_size = math.ceil(np.sqrt(len(groups)))
         fig, axes = plt.subplots(nrows=grid_size, ncols=grid_size, figsize=(axis_size*grid_size,axis_size*grid_size), squeeze=False, sharex=True, sharey=True)
 
         for indices, const_pairs, axis, name in zip(groups, const_groups, axes.flatten(), names):
@@ -1144,6 +1151,8 @@ class CompositeImage:
             fig.colorbar(points, ax=axis)
 
             axis.set_title('Scores of constraints ' + name)
+            axis.xaxis.set_tick_params(labelbottom=True)
+            axis.yaxis.set_tick_params(labelbottom=True)
 
         fig.savefig(path)
 
@@ -1188,9 +1197,9 @@ class CompositeImage:
         return np.sqrt(diff[0]*diff[0] + diff[1]*diff[1])
 
 
-def align_job(aligner, image1, image2, precalc1=None, precalc2=None):
-    return aligner.align(image1=image1, image2=image2, precalc1=precalc1, precalc2=precalc2)
+def align_job(aligner, image1, image2, shape1=None, shape2=None, precalc1=None, precalc2=None):
+    return aligner.align(image1=image1, image2=image2, shape1=shape1, shape2=shape2, precalc1=precalc1, precalc2=precalc2)
 
-def precalc_job(aligner, image):
-    return aligner.precalculate(image)
+def precalc_job(aligner, image, shape=None):
+    return aligner.precalculate(image, shape=shape)
 

@@ -22,8 +22,8 @@ class FFTAligner:
     def precalculate(self, image):
         return np.fft.fft2(image)
 
-    def align(self, image1, image2, precalc1=None, precalc2=None):
-        return calculate_offset_fast(image1, image2, fft1=precalc2, fft2=precalc2, num_peaks=self.num_peaks)
+    def align(self, image1, image2, shape1=None, shape2=None, precalc1=None, precalc2=None):
+        return calculate_offset_fast(image1, image2, shape1=shape1, shape2=shape2, fft1=precalc2, fft2=precalc2, num_peaks=self.num_peaks)
 
 
 class FeatureAligner:
