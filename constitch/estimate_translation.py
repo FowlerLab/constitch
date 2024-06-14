@@ -3,36 +3,134 @@ import numpy as np
 import skimage.io
 import itertools
 
+from .constraints import Constraint
+
+import cv2 as cv
+
 import numba
 
 
 class Aligner:
-    def precalculate(self, image):
+    """ Abstract class that defines an algorithm for aligning two images onto each other.
+    """
+    def precalculate(self, image, shape1=None):
+        """ Performs an arbitrary precalculation step specific to the alignment algorithm.
+        This would be a step in the algorithm that only has to be run once per image,
+        and can be cached for each calculation done with the same image. The result of
+        this function will be passed to the align function as the precalc1 or precalc2 argument
+        """
         pass
 
-    def align(self, image1, image2, precalc1=None, precalc2=None):
+    def align(self, image1, image2, shape1=None, shape2=None, precalc1=None, precalc2=None):
+        """ Performs the alignment of two images, finding the pixel offset that best aligns the
+        two images. The offset should be from image1 to image2. The return value should be a Constraint
+        object, with at least the dx, dy fields filled in to represent the offset of image2 needed
+        to align the two images. If the function finds images don't overlap, None should be returned.
+        """
         pass
 
+    def resize_if_needed(self, image, shape=None, downscale_factor=None):
+        if shape is not None and image.shape != tuple(shape):
+            image = skimage.transform.resize(image, shape)
+        if downscale_factor is not None and downscale_factor != 1:
+            image = skimage.transform.downscale_local_mean(image, downscale_factor)
+        return image
+    
+    def precalculate_if_needed(self, image1, image2, shape1=None, shape2=None, precalc1=None, precalc2=None):
+        if precalc1 is None:
+            precalc1 = self.precalculate(image1, shape1)
+        if precalc2 is None:
+            precalc2 = self.precalculate(image2, shape2)
+        return precalc1, precalc2
 
 
 class FFTAligner:
-    def __init__(self, num_peaks=2):
+    def __init__(self, num_peaks=2, downscale_factor=None):
         self.num_peaks = num_peaks
+        self.downscale_factor = downscale_factor
 
-    def precalculate(self, image):
-        return np.fft.fft2(image)
+    def precalculate(self, image, shape=None):
+        image = self.resize_if_needed(image, shape, self.downscale_factor)
+        fft = np.fft.fft2(image)
+        return image, fft
 
-    def align(self, image1, image2, shape1=None, shape2=None, precalc1=None, precalc2=None):
-        return calculate_offset_fast(image1, image2, shape1=shape1, shape2=shape2, fft1=precalc2, fft2=precalc2, num_peaks=self.num_peaks)
+    def align(self, image1, image2, shape1=None, shape2=None, precalc1=None, precalc2=None, previous_constraint=None):
+        if precalc1 is None:
+            precalc1 = self.precalculate(image1, shape1)
+        else:
+            precalc1[1] = precalc1[1].copy() #fft1 is used for inplace computation to save mem
+        if precalc2 is None:
+            precalc2 = self.precalculate(image2, shape2)
+
+        image1, fft1 = precalc1
+        image2, fft2 = precalc2
+
+        orig_image1, orig_image2 = image1, image2
+        if image1.shape != image2.shape:
+            image1, image2 = image_diff_sizes(image1, image2)
+
+        fft = calc_pcm(fft1.reshape(-1), fft2.reshape(-1)).reshape(fft1.shape)
+        fft = np.fft.ifft2(fft).real
+
+        score, dx, dy = find_peaks(fft, orig_image1, orig_image2, num_peaks)
+        constraint = Constraint(score, dx, dy)
+
+        if self.downscale_factor:
+            constraint.dx *= self.downscale_factor
+            constraint.dy *= self.downscale_factor
+            constraint.error = self.downscale_factor
+
+        return constraint
 
 
 class FeatureAligner:
-    def __init__(self, num_features=100):
+    def __init__(self, num_features=2000):
         self.num_features = num_features
 
     def precalculate(self, image):
-        pass
+        image = (image / np.percentile(image, 99.9) * 255).astype(np.uint8)
+        detector = cv.SIFT_create(nfeatures=self.num_features)
+        
+        keypoints, features = detector.detectAndCompute(image1, None)
 
+        return keypoints, features
+
+    def align(self, image1, image2, shape1=None, shape2=None, precalc1=None, precalc2=None):
+        (keypoints1, features1), (keypoints2, features2) = self.precalculate_if_needed(image1, image2, shape1, shape2, precalc1, precalc2)
+
+        FLANN_INDEX_KDTREE = 1
+        index_params = dict(algorithm = FLANN_INDEX_KDTREE, trees = 5)
+        search_params = dict(checks = 50)
+
+        matcher = cv.FlannBasedMatcher(index_params, search_params)
+
+        matches = matcher.knnMatch(features1, features2, k=2)
+
+        # store all the good matches as per Lowe's ratio test.
+        good = []
+        for m,n in matches:
+            if m.distance < 0.7*n.distance:
+                good.append(m)
+
+        displacements = []
+        for match in good:
+            pos1, pos2 = kp1[match.queryIdx].pt, kp2[match.trainIdx].pt
+            if shape1 is not None:
+                pos1 = pos1[0] * shape1[0] / image1.shape[0], pos1[1] * shape1[1] / image1.shape[1]
+            if shape2 is not None:
+                pos2 = pos2[0] * shape2[0] / image2.shape[0], pos2[1] * shape2[1] / image2.shape[1]
+            displacements.append((pos2[0] - pos1[0], pos2[1] - pos1[1]))
+        displacements = np.array(displacements)
+
+        displacements = displacements.astype(int)
+        values, counts = np.unique(displacements, axis=0, return_counts=True)
+        #print (values, counts)
+        best_value = np.argmax(counts)
+        #print (values[best_value], counts[best_value])
+
+        score = counts[best_value] / counts.sum()
+
+        print ([end - begin for begin, end in zip(times, times[1:])])
 
 
 

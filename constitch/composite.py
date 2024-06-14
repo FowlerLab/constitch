@@ -13,16 +13,10 @@ import warnings
 
 from .estimate_translation import calculate_offset, score_offset
 from .stage_model import SimpleOffsetModel, GlobalStageModel
+from .constraints import Constraint
 from . import merging, estimate_translation
 from .. import utils
 
-
-@dataclasses.dataclass
-class Constraint:
-    score: float
-    dx: int
-    dy: int
-    modeled: bool = False
 
 @dataclasses.dataclass
 class BBox:
@@ -565,8 +559,7 @@ class CompositeImage:
             ))
 
         for (index1, index2), future in self.progress(zip(pairs, futures), total=len(futures)):
-            score, dx, dy = future.result()
-            constraints[(index1,index2)] = Constraint(score, dx, dy)
+            constraints[(index1,index2)] = future.result()
 
         if debug and len(constraints) != 0:
             scores = np.array([const.score for const in constraints.values()])
