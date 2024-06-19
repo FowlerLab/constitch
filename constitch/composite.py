@@ -215,9 +215,11 @@ class CompositeImage:
                 If a sequence is given, each element can be any of the previous values,
                 which are applied to each axis.
         """
+        if positions is None and boxes is None:
+            positions = [(0,0)] * len(images)
+        #assert positions is not None or boxes is not None, "Must specify positions or boxes"
         positions = np.asarray(positions)
         #assert len(self.imageshape(images[0])) == 2, "Only 2d images are supported"
-        assert positions is not None or boxes is not None, "Must specify positions or boxes"
 
         n_dims = positions.shape[1]
         self.n_dims = n_dims
