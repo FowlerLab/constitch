@@ -1,3 +1,4 @@
+import sys
 import collections
 import pickle
 import math
@@ -11,10 +12,10 @@ import sklearn.mixture
 import imageio.v3 as iio
 import warnings
 
-from .estimate_translation import calculate_offset, score_offset
+from .alignment import calculate_offset, score_offset
 from .stage_model import SimpleOffsetModel, GlobalStageModel
 from .constraints import Constraint
-from . import merging, estimate_translation
+from . import merging, alignment
 from .. import utils
 
 
@@ -104,12 +105,15 @@ class CompositeImage:
         self.stage_model = None
         self.set_logging(debug, progress)
         self.set_executor(executor)
+        self.set_aligner(aligner)
 
-        self.aligner = aligner or estimate_translation.FFTAligner()
         self.precalculate = precalculate
 
     def set_executor(self, executor):
         self.executor = executor or SequentialExecutor()
+
+    def set_aligner(self, aligner, rescore_constraints=False):
+        self.aligner = aligner or alignment.FFTAligner()
 
     def set_logging(self, debug=True, progress=False):
         self.debug, self.progress = utils.log_env(debug, progress)
@@ -354,7 +358,8 @@ class CompositeImage:
 
         for (i,j), constraint in other_composite.constraints.items():
             self.constraints[(i+start_index,j+start_index)] = Constraint(
-                    constraint.score, constraint.dx * scale_conversion, constraint.dy * scale_conversion, constraint.modeled)
+                    dx=constraint.dx * scale_conversion, dy=constraint.dy * scale_conversion, 
+                    score=constraint.score, modeled=constraint.modeled, error=constraint.error * scale_conversion)
 
         if align_coords:
             pass
@@ -825,7 +830,7 @@ class CompositeImage:
                 "Image offset from stage model does not contain any overlap."
                 " The stage model may not have correctly modeled the movement")
             score = score_offset(self.images[i], self.images[j], dx, dy) * score_multiplier
-            constraints[(i,j)] = Constraint(score, dx, dy, modeled=True)
+            constraints[(i,j)] = Constraint(score=score, dx=dx, dy=dy, modeled=True)
 
         self.debug('Added', len(constraints) - start_size, 'calculated constraints using stage model')
 
@@ -1150,6 +1155,122 @@ class CompositeImage:
             axis.yaxis.set_tick_params(labelbottom=True)
 
         fig.savefig(path)
+
+    def html_summary(self, path, score_func=None):
+        import xml.etree.ElementTree as ET
+        html = ET.Element('html')
+
+        head = ET.SubElement(html, 'head')
+        style = ET.SubElement(head, 'style')
+        style.text = """
+        g .fade-hover {
+            opacity: 0.2;
+        }
+        g:hover .fade-hover {
+            opacity: 1;
+        }
+        g .show-hover {
+            display: none;
+        }
+        g:hover .show-hover {
+            display: block;
+        }
+        """
+
+        body = ET.SubElement(html, 'body')
+        
+        mins, maxes = self.boxes.pos1.min(axis=0), self.boxes.pos2.max(axis=0)
+        svg = ET.SubElement(body, 'svg', viewbox="{} {} {} {}".format(mins[0], mins[1], maxes[0], maxes[1]))
+
+        for i,box in enumerate(self.boxes):
+            class_names = 'box'
+            if len(box.pos1) == 3:
+                class_names += ' start{0} end{0}'.format(int(box.pos1[2]))
+            group = ET.SubElement(svg, 'g', attrib={
+                "class": class_names,
+            })
+            rect = ET.SubElement(group, 'rect', attrib={
+                "class": "fade-hover",
+                "x": str(box.pos1[0]), "y": str(box.pos1[1]),
+                "width": str(box.size()[0]), "height": str(box.size()[1]),
+                "stroke": 'black', "fill": 'transparent',
+                "stroke-width": str(int(box.size()[:2].min()) // 10),
+            })
+
+            text = ET.SubElement(group, 'text', attrib={
+                "class": "show-hover",
+                "x": str(box.pos1[0] + box.size()[0] // 2),
+                "y": str(box.pos1[1] + box.size()[1] * 2 // 3),
+                "font-size": str(box.size()[1] // 2),
+                "text-anchor": "middle",
+            })
+            text.text = str(i)
+
+        for (i,j), constraint in self.constraints.items():
+            box1, box2 = self.boxes[i], self.boxes[j]
+            class_names = 'constraint'
+            if len(box1.pos1) == 3:
+                class_names += ' start{} end{}'.format(int(box1.pos1[2]), int(box2.pos1[2]))
+
+            group = ET.SubElement(svg, 'g')
+            center = (box1.pos1 + box1.pos2 + box2.pos1 + box2.pos2) // 4
+            line = ET.SubElement(group, 'line', attrib={
+                "class": "fade-hover",
+                "x1": str(center[0] - constraint.dx // 2),
+                "y1": str(center[1] - constraint.dy // 2),
+                "x2": str(center[0] + constraint.dx // 2),
+                "y2": str(center[1] + constraint.dy // 2),
+                "stroke": "rgb(50% {}% 50%)".format(int(constraint.score * 100)),
+                "stroke-width": str(min(box1.size()[:2].min(), box2.size()[:2].min()) // 2),
+                "stroke-linecap": "round",
+            })
+
+            line = ET.SubElement(group, 'line', attrib={
+                "class": "show-hover",
+                "x1": str(box1.pos1[0] + box1.size()[0] / 2),
+                "y1": str(box1.pos1[1] + box1.size()[1] / 2),
+                "x2": str(box2.pos1[0] + box2.size()[0] / 2),
+                "y2": str(box2.pos1[1] + box2.size()[1] / 2),
+                "stroke": "black",
+                "stroke-width": str(min(box1.size()[:2].min(), box2.size()[:2].min()) // 40),
+            })
+
+            #"""
+            rect = ET.SubElement(group, 'rect', attrib={
+                "class": "show-hover",
+                "x": str(box1.pos1[0]), "y": str(box1.pos1[1]),
+                "width": str(box1.size()[0]), "height": str(box1.size()[1]),
+                "stroke": 'black', "fill": 'transparent',
+                "stroke-width": str(int(box1.size().mean()) // 10),
+            })
+            text = ET.SubElement(group, 'text', attrib={
+                "class": "show-hover",
+                "x": str(box1.pos1[0] if box1.pos1[0] <= box2.pos1[0] else box1.pos2[0]),
+                "y": str(box1.pos1[1] + box1.size()[1] * 2 // 3),
+                "font-size": str(box1.size()[1] // 2),
+                "text-anchor": "end" if box1.pos1[0] <= box2.pos1[0] else "start",
+            })
+            text.text = str(i)
+
+            rect = ET.SubElement(group, 'rect', attrib={
+                "class": "show-hover",
+                "x": str(box2.pos1[0]), "y": str(box2.pos1[1]),
+                "width": str(box2.size()[0]), "height": str(box2.size()[1]),
+                "stroke": 'black', "fill": 'transparent',
+                "stroke-width": str(int(box2.size().mean()) // 10),
+            })
+            text = ET.SubElement(group, 'text', attrib={
+                "class": "show-hover",
+                "x": str(box2.pos2[0] if box1.pos1[0] <= box2.pos1[0] else box2.pos1[0]),
+                "y": str(box2.pos1[1] + box2.size()[1] * 2 // 3),
+                "font-size": str(box2.size()[1] // 2),
+                "text-anchor": "start" if box1.pos1[0] <= box2.pos1[0] else "end",
+            })
+            text.text = str(j)
+            #"""
+
+        with open(path, 'wb') as ofile:
+            ET.ElementTree(html).write(ofile, encoding='utf-8', method='html')
 
 
     def score_heatmap(self, path, score_func=None):

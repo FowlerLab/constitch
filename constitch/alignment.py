@@ -1,4 +1,5 @@
 import time
+import sys
 import numpy as np
 import skimage.io
 import itertools
@@ -21,11 +22,14 @@ class Aligner:
         """
         pass
 
-    def align(self, image1, image2, shape1=None, shape2=None, precalc1=None, precalc2=None):
+    def align(self, image1, image2, shape1=None, shape2=None, precalc1=None, precalc2=None, constraint=None):
         """ Performs the alignment of two images, finding the pixel offset that best aligns the
         two images. The offset should be from image1 to image2. The return value should be a Constraint
         object, with at least the dx, dy fields filled in to represent the offset of image2 needed
-        to align the two images. If the function finds images don't overlap, None should be returned.
+        to align the two images. If the function finds the images don't overlap, None should be returned.
+        If a constraint is specified, this method should only return a constraint that fits within the error
+        of given constraint, meaning within constraint.error pixels from the (constraint.dx, constraint.dy)
+        offset.
         """
         pass
 
@@ -44,13 +48,14 @@ class Aligner:
         return precalc1, precalc2
 
 
-class FFTAligner:
+class FFTAligner(Aligner):
     def __init__(self, num_peaks=2, downscale_factor=None):
         self.num_peaks = num_peaks
         self.downscale_factor = downscale_factor
 
     def precalculate(self, image, shape=None):
-        image = self.resize_if_needed(image, shape, self.downscale_factor)
+        #print (image.shape, file=sys.stderr)
+        image = self.resize_if_needed(image, shape, downscale_factor=self.downscale_factor)
         fft = np.fft.fft2(image)
         return image, fft
 
@@ -72,8 +77,8 @@ class FFTAligner:
         fft = calc_pcm(fft1.reshape(-1), fft2.reshape(-1)).reshape(fft1.shape)
         fft = np.fft.ifft2(fft).real
 
-        score, dx, dy = find_peaks(fft, orig_image1, orig_image2, num_peaks)
-        constraint = Constraint(score, dx, dy)
+        score, dx, dy = find_peaks(fft, orig_image1, orig_image2, self.num_peaks)
+        constraint = Constraint(dx=dx, dy=dy, score=score)
 
         if self.downscale_factor:
             constraint.dx *= self.downscale_factor
@@ -83,15 +88,19 @@ class FFTAligner:
         return constraint
 
 
-class FeatureAligner:
+class FeatureAligner(Aligner):
     def __init__(self, num_features=2000):
         self.num_features = num_features
 
-    def precalculate(self, image):
+    def precalculate(self, image, shape=None):
         image = (image / np.percentile(image, 99.9) * 255).astype(np.uint8)
         detector = cv.SIFT_create(nfeatures=self.num_features)
         
         keypoints, features = detector.detectAndCompute(image1, None)
+
+        if shape is not None and image.shape != tuple(shape):
+            keypoints[:,0] *= shape[0] / image.shape[0]
+            keypoints[:,1] *= shape[1] / image.shape[1]
 
         return keypoints, features
 
