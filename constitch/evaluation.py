@@ -1,7 +1,7 @@
 import numpy as np
 import itertools
 
-from .estimate_translation import pcm, multi_peak_max, extract_overlap_subregion, ncc
+from .alignment import pcm, multi_peak_max, extract_overlap_subregion, ncc
 
 
 def sort_peaks(image1, image2, yins, xins, ymin, ymax, xmin, xmax, n = 25):
