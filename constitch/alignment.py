@@ -61,18 +61,29 @@ class FFTAligner(Aligner):
 
     def align(self, image1, image2, shape1=None, shape2=None, precalc1=None, precalc2=None, previous_constraint=None):
         if precalc1 is None:
-            precalc1 = self.precalculate(image1, shape1)
+            image1 = self.resize_if_needed(image1, shape1, downscale_factor=self.downscale_factor)
         else:
-            precalc1[1] = precalc1[1].copy() #fft1 is used for inplace computation to save mem
-        if precalc2 is None:
-            precalc2 = self.precalculate(image2, shape2)
+            image1 = precalc1[0]
 
-        image1, fft1 = precalc1
-        image2, fft2 = precalc2
+        if precalc2 is None:
+            image2 = self.resize_if_needed(image2, shape2, downscale_factor=self.downscale_factor)
+        else:
+            image2 = precalc2[0]
 
         orig_image1, orig_image2 = image1, image2
+            
         if image1.shape != image2.shape:
             image1, image2 = image_diff_sizes(image1, image2)
+
+        if image1.shape != orig_image1.shape or precalc1 is None:
+            fft1 = np.fft.fft2(image1)
+        else:
+            fft1 = precalc1[1].copy() # fft1 is used for in place computation to save mem
+
+        if image2.shape != orig_image2.shape or precalc2 is None:
+            fft2 = np.fft.fft2(image2)
+        else:
+            fft2 = precalc2[1]
 
         fft = calc_pcm(fft1.reshape(-1), fft2.reshape(-1)).reshape(fft1.shape)
         fft = np.fft.ifft2(fft).real

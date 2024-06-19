@@ -222,10 +222,13 @@ class CompositeImage:
         if positions is None and boxes is None:
             positions = [(0,0)] * len(images)
         #assert positions is not None or boxes is not None, "Must specify positions or boxes"
-        positions = np.asarray(positions)
+        if positions is None:
+            n_dims = len(boxes[0].pos1)
+        else:
+            positions = np.asarray(positions)
+            n_dims = positions.shape[1]
         #assert len(self.imageshape(images[0])) == 2, "Only 2d images are supported"
 
-        n_dims = positions.shape[1]
         self.n_dims = n_dims
 
         if scale == 'pixel':
@@ -251,6 +254,12 @@ class CompositeImage:
                 ))
         
         self.images.extend(images)
+
+    def add_image(self, image, position=None, box=None, scale='pixel', imagescale=1):
+        return self.add_images([image], 
+            positions = position and [position],
+            boxes = box and [box],
+            scale = scale, imagescale = imagescale)
 
     def add_split_image(self, image, num_tiles=None, tile_shape=None, overlap=0.1):
         """ Adds an image split into a number of tiles
@@ -1010,20 +1019,15 @@ class CompositeImage:
         if keep_zero:
             mins = 0
 
-        self.debug(mins, maxes)
         start_mins = np.array(self.boxes.pos1.min(axis=0)[:2])
         start_maxes = np.array(self.boxes.pos2.max(axis=0)[:2])
-        self.debug(start_mins, start_maxes)
         
         if mins is not None:
             start_mins[:] = mins
         if maxes is not None:
             start_maxes[:] = maxes
-        self.debug(start_mins, start_maxes)
 
         mins, maxes = start_mins, start_maxes
-
-        self.debug (mins, maxes)
 
         if keep_zero:
             mins = np.zeros_like(mins)
@@ -1032,7 +1036,7 @@ class CompositeImage:
             real_images = self.images
 
         example_image = self.fullimagearr(real_images[0])
-        self.debug(example_image.shape, 'example shape')
+        
         full_shape = tuple((maxes - mins) * self.scale) + example_image.shape[2:]
         merger = merger(full_shape, example_image.dtype)
         if out is not None:
@@ -1044,28 +1048,19 @@ class CompositeImage:
             pos1 = ((self.boxes[i].pos1[:2] - mins) * self.scale).astype(int)
             pos2 = ((self.boxes[i].pos2[:2] - mins) * self.scale).astype(int)
             image = self.fullimagearr(real_images[i])
-            #self.debug(image.shape)
+
             if np.any(pos2 - pos1 != image.shape[:2]):
-                self.debug(pos1, pos2, pos2 - pos1)
-                self.debug(image.shape)
                 warnings.warn("resizing some images")
-                image = skimage.transform.resize(image, pos2 - pos1)
+                image = skimage.transform.resize(image, pos2 - pos1, preserve_range=True).astype(image.dtype)
             
             image = image[max(0,-pos1[0]):,max(0,-pos1[1]):]
-            #self.debug(pos1, pos2, image.shape)
+
             pos1 = np.maximum(0, np.minimum(pos1, maxes - mins))
             pos2 = np.maximum(0, np.minimum(pos2, maxes - mins))
-            #self.debug(pos1, pos2, image.shape)
-            #image = image[max(0,-pos1[0]):,max(0,-pos1[1]):]
-            #self.debug(pos1, pos2, image.shape)
-            #self.debug(max(0,-pos1[0]),max(0,-pos1[1]))
+
             image = image[:pos2[0]-pos1[0],:pos2[1]-pos1[1]]
-            #self.debug(pos1, pos2, image.shape)
+
             if image.size == 0: continue
-            self.debug(self.boxes[i])
-            self.debug((self.boxes[i].pos1[:2] - mins) * self.scale)
-            self.debug((self.boxes[i].pos2[:2] - mins) * self.scale)
-            self.debug(image.shape, pos1, pos2, mins, maxes)
 
             position = (slice(pos1[0], pos2[0]), slice(pos1[1], pos2[1]))
             merger.add_image(image, position)
@@ -1084,10 +1079,8 @@ class CompositeImage:
         import matplotlib.pyplot as plt
         import matplotlib.patches
 
-            
-
         groups = [list(range(len(self.boxes)))]
-        const_groups = self.constraints.keys()
+        const_groups = [self.constraints.keys()]
         names = ['']
         if self.boxes[0].pos1.shape[0] == 3:
             groups = []
@@ -1118,7 +1111,6 @@ class CompositeImage:
         fig, axes = plt.subplots(nrows=grid_size, ncols=grid_size, figsize=(axis_size*grid_size,axis_size*grid_size), squeeze=False, sharex=True, sharey=True)
 
         for indices, const_pairs, axis, name in zip(groups, const_groups, axes.flatten(), names):
-            print (name)
 
             for i,index in enumerate(indices):
                 x, y = self.boxes[index].pos1[:2]
