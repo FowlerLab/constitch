@@ -33,6 +33,7 @@ class Aligner:
         """
         pass
 
+    # Helper functions for subclasses:
     def resize_if_needed(self, image, shape=None, downscale_factor=None):
         if shape is not None and image.shape != tuple(shape):
             image = skimage.transform.resize(image, shape)
@@ -49,14 +50,19 @@ class Aligner:
 
 
 class FFTAligner(Aligner):
-    def __init__(self, num_peaks=2, downscale_factor=None):
+    """ An aligner that uses the phase cross correlation algorithm to estimate the proper alignment of two images.
+    The algorithm is the same as described in Kuglin, Charles D. "The phase correlation image alignment method."
+    http://boutigny.free.fr/Astronomie/AstroSources/Kuglin-Hines.pdf
+    """
+    def __init__(self, num_peaks=2, precalculate_fft=True, downscale_factor=None):
         self.num_peaks = num_peaks
+        self.precalculate_fft = precalculate_fft
         self.downscale_factor = downscale_factor
 
     def precalculate(self, image, shape=None):
         #print (image.shape, file=sys.stderr)
         image = self.resize_if_needed(image, shape, downscale_factor=self.downscale_factor)
-        fft = np.fft.fft2(image)
+        fft = None if not self.precalculate_fft else np.fft.fft2(image)
         return image, fft
 
     def align(self, image1, image2, shape1=None, shape2=None, precalc1=None, precalc2=None, previous_constraint=None):
@@ -75,12 +81,12 @@ class FFTAligner(Aligner):
         if image1.shape != image2.shape:
             image1, image2 = image_diff_sizes(image1, image2)
 
-        if image1.shape != orig_image1.shape or precalc1 is None:
+        if image1.shape != orig_image1.shape or precalc1 is None or precalc1[1] is None: #precalc[1] would be none if precalculate_fft is false
             fft1 = np.fft.fft2(image1)
         else:
             fft1 = precalc1[1].copy() # fft1 is used for in place computation to save mem
 
-        if image2.shape != orig_image2.shape or precalc2 is None:
+        if image2.shape != orig_image2.shape or precalc2 is None or precalc2[1] is None:
             fft2 = np.fft.fft2(image2)
         else:
             fft2 = precalc2[1]
@@ -88,7 +94,11 @@ class FFTAligner(Aligner):
         fft = calc_pcm(fft1.reshape(-1), fft2.reshape(-1)).reshape(fft1.shape)
         fft = np.fft.ifft2(fft).real
 
-        score, dx, dy = find_peaks(fft, orig_image1, orig_image2, self.num_peaks)
+        if previous_constraint is not None:
+            score, dx, dy = find_peaks_estimate(fft, orig_image1, orig_image2, self.num_peaks,
+                    estimate=(previous_constraint.dx, previous_constraint.dy), search_range=previous_constraint.error)
+        else:
+            score, dx, dy = find_peaks(fft, orig_image1, orig_image2, self.num_peaks)
         constraint = Constraint(dx=dx, dy=dy, score=score)
 
         if self.downscale_factor:
@@ -381,6 +391,38 @@ def find_peaks(fft, image1, image2, num_peaks):
             for yval in (yval, shape[1] - yval):
                 for xval in (xval, -xval):
                     for yval in (yval, -yval):
+                        section1 = image1[max(0,xval):,max(0,yval):]
+                        section2 = image2[max(0,-xval):,max(0,-yval):]
+                        dim1 = min(section1.shape[0], section2.shape[0])
+                        dim2 = min(section1.shape[1], section2.shape[1])
+                        section1 = section1[:dim1,:dim2]
+                        section2 = section2[:dim1,:dim2]
+                        if section1.size == 0: continue
+
+                        peak = (ncc_fast(section1, section2), xval, yval)
+
+                        if peak[0] > best_peak[0]:
+                            best_peak = peak
+
+                if xval < shape[0] and yval < shape[1]:
+                    fft[xval,yval] = 0
+
+    return best_peak
+
+@numba.jit(nopython=True)
+def find_peaks_estimate(fft, image1, image2, num_peaks, estimate, search_range):
+    best_peak = (0,0,0)
+    shape = (max(image1.shape[0], image2.shape[0]), max(image1.shape[1], image2.shape[1]))
+    for i in range(num_peaks):
+        peak_index = np.argmax(fft, axis=None)
+        xval, yval = peak_index // fft.shape[1], peak_index % fft.shape[1]
+        for xval in (xval, shape[0] - xval):
+            for yval in (yval, shape[1] - yval):
+                for xval in (xval, -xval):
+                    for yval in (yval, -yval):
+                        if max(abs(estimate[0] - xval), abs(estimate[1] - yval)) > search_range:
+                            continue
+
                         section1 = image1[max(0,xval):,max(0,yval):]
                         section2 = image2[max(0,-xval):,max(0,-yval):]
                         dim1 = min(section1.shape[0], section2.shape[0])

@@ -527,7 +527,7 @@ class CompositeImage:
 
         return composite.constraints.keys()
 
-    def calc_constraints(self, pairs=None, precalculate=False, return_constraints=False, debug=True, **kwargs):
+    def calc_constraints(self, pairs=None, precalculate=False, return_constraints=False, use_previous_constraints=True, debug=True, **kwargs):
         """ Estimates the pairwise translations of images and add thems as constraints
         in the montage
 
@@ -572,6 +572,7 @@ class CompositeImage:
                 image1 = self.images[index1], image2 = self.images[index2],
                 precalc1 = precalcs[index1], precalc2 = precalcs[index2],
                 shape1 = self.boxes[index1].size()[:2], shape2 = self.boxes[index2].size()[:2],
+                previous_constraint = self.constraints.get((index1, index2), None) if use_previous_constraints else None,
             ))
 
         for (index1, index2), future in self.progress(zip(pairs, futures), total=len(futures)):
@@ -1305,8 +1306,8 @@ class CompositeImage:
         return np.sqrt(diff[0]*diff[0] + diff[1]*diff[1])
 
 
-def align_job(aligner, image1, image2, shape1=None, shape2=None, precalc1=None, precalc2=None):
-    return aligner.align(image1=image1, image2=image2, shape1=shape1, shape2=shape2, precalc1=precalc1, precalc2=precalc2)
+def align_job(aligner, image1, image2, shape1=None, shape2=None, precalc1=None, precalc2=None, previous_constraint=None):
+    return aligner.align(image1=image1, image2=image2, shape1=shape1, shape2=shape2, precalc1=precalc1, precalc2=precalc2, previous_constraint=previous_constraint)
 
 def precalc_job(aligner, image, shape=None):
     return aligner.precalculate(image, shape=shape)
