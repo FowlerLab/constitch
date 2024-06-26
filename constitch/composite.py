@@ -19,6 +19,7 @@ from . import merging, alignment
 from .. import utils
 
 
+
 @dataclasses.dataclass
 class BBox:
     pos1: np.ndarray
@@ -130,11 +131,13 @@ class CompositeImage:
         composite.mapping = None
 
     def save(self, path, save_images=True):
-        """ Saves this composite to the given path. Can be restored with the `CompositeImage.load`
+        """ Saves this composite to the given path. Can be restored with the `CompositeImage.load()`
         function.
 
             save_images: bool, whether the images should be included in the save file. If they are
-                excluded the programmer needs to restore them when loading.
+                excluded the programmer needs to restore them when loading. Not saving the images
+                can reduce the memory needed for the composite file and speed up loading and saving
+                dramatically
         """
 
         obj = dict(
@@ -155,7 +158,7 @@ class CompositeImage:
 
     @classmethod
     def load(cls, path, **kwargs):
-        """ Loads a composite previously saved with `CompositeImage.save` to the given
+        """ Loads a composite previously saved with `CompositeImage.save()` to the given
         path. If the composite was saved without images they should be restored by setting
         composite.images to a list of the images.
         """
@@ -262,7 +265,15 @@ class CompositeImage:
             scale = scale, imagescale = imagescale)
 
     def add_split_image(self, image, num_tiles=None, tile_shape=None, overlap=0.1):
-        """ Adds an image split into a number of tiles
+        """ Adds an image split into a number of tiles. This can be used to divide up
+        a large image into smaller peices for efficient processing. The resulting
+        images are guaranteed to all be the same size.
+        A common pattern would be:
+
+        composite.add_split_image(image, 10)
+        for i in range(len(composite.images)):
+            composite.images[i] = process(composite.images[i])
+        result = composite.stitch_images()
 
             image: ndarray
                 the image that will be split into tiles
@@ -437,7 +448,7 @@ class CompositeImage:
             scale_factor: float or int
                 Scale of images in this composite, as a multiplier. Eg a scale_factor of
                 10 will result in each pixel in images corresponding to 10 pixels in the
-                output of functions like `CompositeImage.stitch_images` or when merging composites together.
+                output of functions like `CompositeImage.stitch_images()` or when merging composites together.
         """
         self.scale = scale_factor
 
@@ -536,7 +547,7 @@ class CompositeImage:
                 The indices of image pairs to add constraints to. Defaults to
                 all images that overlap or are adjacent based on the estimated
                 positions that don't already have constraints, see 
-                `CompositeImage.find_unconstrained_pairs` for more info.
+                `CompositeImage.find_unconstrained_pairs()` for more info.
                 Important: the pairs given are not checked for overlap, so invalid
                 constraints could be generated if specific indices are passed in.
 
@@ -810,7 +821,7 @@ class CompositeImage:
                 The indices of image pairs to add constraints to. Defaults to
                 all images that overlap or are adjacent based on the estimated
                 positions that don't already have constraints, see 
-                `CompositeImage.find_unconstrained_pairs` for more info.
+                `CompositeImage.find_unconstrained_pairs()` for more info.
                 Important: the pairs given are not checked for overlap, so invalid
                 constraints could be generated if specific indices are passed in.
                 Also passing a pair that already has a constraint will overwrite it
@@ -984,7 +995,7 @@ class CompositeImage:
 
 
     def stitch_images(self, indices=None, real_images=None, out=None, bg_value=None, return_bg_mask=False,
-            mins=None, maxes=None, keep_zero=False, merger=merging.MeanMerger):
+            mins=None, maxes=None, keep_zero=False, merger=None):
         """ Combines images in the composite into a single image
             
             indices: sequence of int
@@ -1013,6 +1024,7 @@ class CompositeImage:
 
         if indices is None:
             indices = list(range(len(self.images)))
+        merger = merger or merging.MeanMerger()
 
         if type(indices[0]) == bool:
             indices = [i for i in range(len(indices)) if indices[i]]
@@ -1039,7 +1051,7 @@ class CompositeImage:
         example_image = self.fullimagearr(real_images[0])
         
         full_shape = tuple((maxes - mins) * self.scale) + example_image.shape[2:]
-        merger = merger(full_shape, example_image.dtype)
+        merger.create_image(full_shape, example_image.dtype)
         if out is not None:
             assert merger.image.shape == out.shape and merger.image.dtype == out.dtype, (
                 "Provided output image does not match expected shape or dtype: {} {}".format(merger.image.shape, merger.image.dtype))

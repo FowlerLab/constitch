@@ -55,6 +55,22 @@ class FFTAligner(Aligner):
     http://boutigny.free.fr/Astronomie/AstroSources/Kuglin-Hines.pdf
     """
     def __init__(self, num_peaks=2, precalculate_fft=True, downscale_factor=None):
+        """
+            num_peaks: int default 2
+                Sets the number of peaks in the resulting phase cross correlation image to be checked. Sometimes the highest
+                peak is not actually the best offset for alignment so checking multiple peaks can help find the one that
+                has the highest ncc score. Increasing this will also increase processing time, possibly dramatically.
+            precalculate_fft: bool default True
+                Whether or not the FFT of the images should be precalculated and cached or be calculated every time.
+                The FFT is able to be precalculated however it does take up a large amount of memory, so if memory
+                is a limiting factor setting this to False can help
+            downscale_factor: int, optional
+                This algorithm is rather slow when calculating large numbers of constraints, and one way to improve
+                speed is by downscaling the images before running the algorithm. This will improve runtime at the expense
+                of precision, the constraints calculated will have a nonzero error value. Also, if the downscale factor
+                is large enough the algorithm can begin to fail and not find any overlap, in general the largest recommended
+                value is around 32, but it depends on how large the features in your images are.
+        """
         self.num_peaks = num_peaks
         self.precalculate_fft = precalculate_fft
         self.downscale_factor = downscale_factor

@@ -5,9 +5,17 @@ import skimage.io
 from .. import utils
 
 class Merger:
-    """Abstract class that specifies the methods required for an image merger.
+    """ Abstract class that specifies the methods required for an image merger.
+    At its heart an image merger is a method for handling multiple values at one
+    pixel location, either taking one, combining them all, or some other method.
+    Using this the merger is able to combine many images at different locations
+    into one final image.
+    The simplest merger is LastMerger, which doesn't do any extra processing, it
+    simply places each image on top of each other, meaning overlapping areas will
+    be the last image added. Other mergers attempt to combine images better but
+    this requires using more memory and processing.
     """
-    def __init__(self, image_shape, image_dtype):
+    def create_image(self, image_shape, image_dtype):
         """ Init is called with the shape of the final image (may be
         more than 2d) and the dtype. Normally a merger would create
         an image using this information.
@@ -30,8 +38,28 @@ class Merger:
         pass
 
 
-class MeanMerger:
-    def __init__(self, image_shape, image_dtype):
+class LastMerger(Merger):
+    """ This is the simplest merger, overlap is decided just by which image was added last.
+    This also means it has no extra memory requirements, if your images have no overlap or
+    you don't need any merging this is the best choice.
+    """
+    def create_image(self, image_shape, image_dtype):
+        self.image = np.zeros(image_shape, image_dtype)
+
+    def add_image(self, image, location):
+        self.image[location] = image
+
+    def final_image(self):
+        return self.image, np.ones(self.image.shape, dtype=bool)
+
+class MeanMerger(Merger):
+    """ A merger that calculates the mean of any overlapping areas. This requires
+    storing the whole image using a larger dtype, eg when merging uint16 images
+    the whole image will be stored as a uint32 image to account for possible overflow.
+    This will double the memory requirements compared to other mergers such as LastMerger
+    or EfficientMeanMerger.
+    """
+    def create_image(self, image_shape, image_dtype):
         self.image = np.zeros(image_shape, self.promote_dtype(image_dtype))
         self.counts = np.zeros(image_shape[:2], dtype=np.uint8)
         self.og_dtype = image_dtype
@@ -64,8 +92,12 @@ class MeanMerger:
         return self.image.astype(self.og_dtype), self.counts != 0
 
 
-class EfficientMeanMerger:
-    def __init__(self, image_shape, image_dtype):
+class EfficientMeanMerger(Merger):
+    """ A version of MeanMerger that does not require double the memory, however there is a small loss of 
+    precision as calculation errors can add up as images are merged. It is recommended to start with
+    MeanMerger and if memory becomes an issue switch to this one.
+    """
+    def create_image(self, image_shape, image_dtype):
         self.image = np.zeros(image_shape, image_dtype)
         self.counts = np.zeros(image_shape[:2] + (1,) * (len(image_shape)-2), dtype=np.uint8)
 
@@ -82,8 +114,13 @@ class EfficientMeanMerger:
         return self.image, self.counts != 0
 
 
-class NearestMerger:
-    def __init__(self, image_shape, image_dtype):
+class NearestMerger(Merger):
+    """ This merger keeps the pixel that is closer to the center of its image when there is overlap.
+    This normally means that the edges of images are removed and central pixels are prioritized.
+    This does require more memory, an extra array of uint16 the size of the final image. If memory
+    is an issue EfficientNearestMerger uses a similar algorithm but only needs an array of uint8.
+    """
+    def create_image(self, image_shape, image_dtype):
         self.image = np.zeros(image_shape, image_dtype)
         self.dists = np.zeros(image_shape[:2] + (1,) * (len(image_shape)-2), dtype=np.uint16)
 
@@ -103,8 +140,13 @@ class NearestMerger:
         return self.image, self.dists != 0
 
 
-class EfficientNearestMerger:
-    def __init__(self, image_shape, image_dtype):
+class EfficientNearestMerger(Merger):
+    """ This merger does the same as the NearestMerger but it does it with only an extra array of
+    uint8, halfing the extra memory requirements. The downside is that it will only trim up to 255
+    pixels away from the edge of images, so if the overlap between your images is much larger than
+    this, this merger will not give the same results.
+    """
+    def create_image(self, image_shape, image_dtype):
         self.image = np.zeros(image_shape, image_dtype)
         self.dists = np.zeros(image_shape[:2], dtype=np.uint8)
         print (self.image.shape, self.dists.shape, file=sys.stderr)
@@ -127,21 +169,20 @@ class EfficientNearestMerger:
 
 
 
-class LastMerger:
-    def __init__(self, image_shape, image_dtype):
-        self.image = np.zeros(image_shape, image_dtype)
-
-    def add_image(self, image, location):
-        self.image[location] = image
-
-    def final_image(self):
-        return self.image, np.ones(self.image.shape, dtype=bool)
-
 
 class MaskMerger(NearestMerger):
-    def __init__(self, image_shape, image_dtype, overlap_threshold=0.75):
-        super().__init__(image_shape, int)
+    """ This merger is specifically for merging an image mask, where each integer represents
+    an independent class, for example cell segmentation masks. Other merging techniques won't
+    work on these image masks. This merger first makes sure that every mask in each image
+    has a unique integer value, then merges overlapping sections by going through the
+    masks and combining masks that are mostly overlapping in both images. The amount
+    of overlap needed to combine masks is the overlap_threshold.
+    """
+    def __init__(self, overlap_threshold=0.75):
         self.overlap_threshold = overlap_threshold
+
+    def create_image(self, image_shape, image_dtype):
+        super().create_image(image_shape, int)
 
     def add_image(self, image, location):
         print ("Adding image", location, file=sys.stderr)
