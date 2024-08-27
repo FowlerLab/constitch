@@ -821,6 +821,12 @@ class CompositeImage:
             if len(fake_pairs) == len(real_consts): break
 
         fake_consts = self.calc_constraints(fake_pairs, return_constraints=True, debug=False).values()
+        fake_scores = np.array([const.score for const in fake_consts])
+        real_scores = np.array([const.score for const in real_consts])
+
+        thresh = np.percentile(fake_scores, 98)
+        return thresh
+
         scores = np.array([const.score for const in real_consts] + [const.score for const in fake_consts])
 
         #thresh = max(const.score for const in fake_consts)
@@ -1089,7 +1095,7 @@ class CompositeImage:
 
         return solution_mat, solution_vals
 
-    def solve_constraints(self, apply_positions=True, filter_outliers=False, max_outlier_ratio=0.9, outlier_threshold=5, ignore_bad_constraints=False):
+    def solve_constraints(self, apply_positions=True, filter_outliers=False, max_outlier_ratio=0.9, outlier_threshold=5, ignore_bad_constraints=False, scores_plot_path=None, use_outiler_model=False):
         """ Solves all contained constraints to get absolute image positions.
 
         This is done by constructing a set of linear equations, with every constraint
@@ -1112,6 +1118,7 @@ class CompositeImage:
             print ('outlier')
             constraints = self.constraints.copy()
 
+            i = 0
             while True:
                 solution_mat, solution_vals = self.make_constraint_matrix(constraints)
                 solution, residuals, rank, sing = np.linalg.lstsq(solution_mat, solution_vals, rcond=None)
@@ -1146,10 +1153,25 @@ class CompositeImage:
                 for dist, (id1, id2) in max_consts.values():
                     if dist >= max(outlier_threshold, max_dist * 0.2) and dist >= max_consts[id1][0] and dist >= max_consts[id1][0]:
                         if (id1, id2) in constraints:
-                            self.debug ('del', id1, id2)
+                            #self.debug ('del', id1, id2)
                             del constraints[(id1, id2)]
                 self.debug ('after filter', len(constraints))
 
+                if scores_plot_path:
+                    tmp = self.constraints
+                    self.constraints = constraints
+                    self.plot_scores(scores_plot_path.format(i), score_func=self.constraint_accuracy)
+                    self.constraints = tmp
+                i += 1
+
+        #if use_outiler_model:
+            #solution_mat, solution_vals = self.make_constraint_matrix()
+            #huber = sklearn.linear_model.HuberRegressor(max_iter=10000, fit_intercept=False).fit(solution_mat, solution_vals)
+            #print (huber.coef_)
+            #print (huber.scale_)
+            #print (huber.coef_.shape)
+            #solution = huber.coef_
+            #solution, residuals, rank, sing = np.linalg.lstsq(solution_mat, solution_vals, rcond=None)
         else:
             solution_mat, solution_vals = self.make_constraint_matrix()
             solution, residuals, rank, sing = np.linalg.lstsq(solution_mat, solution_vals, rcond=None)
@@ -1247,6 +1269,9 @@ class CompositeImage:
                 "Provided output image does not match expected shape or dtype: {} {}".format(merger.image.shape, merger.image.dtype))
             merger.image = out
 
+        import matplotlib.pyplot as plt
+        fig, axis = plt.subplots()
+
         for i in indices:
             pos1 = ((self.boxes[i].pos1[:2] - mins) * self.scale).astype(int)
             pos2 = ((self.boxes[i].pos2[:2] - mins) * self.scale).astype(int)
@@ -1265,10 +1290,15 @@ class CompositeImage:
 
             if image.size == 0: continue
 
+            x1, y1 = pos1
+            x2, y2 = pos2
+            axis.plot([x1, x1, x2, x2, x1], [y1, y2, y2, y1, y1])
             position = (slice(pos1[0], pos2[0]), slice(pos1[1], pos2[1]))
             merger.add_image(image, position)
 
         full_image, mask = merger.final_image()
+
+        fig.savefig('plots/merger_locations.png')
 
         if bg_value is not None:
             full_image[mask] = bg_value
@@ -1342,8 +1372,11 @@ class CompositeImage:
                 #axis.plot((pos1[0], pos2[0]), (pos1[1], pos2[1]), linewidth=1, color='red' if constraint.modeled else 'black')
             poses = np.array(poses)
 
-            points = axis.scatter(poses[:,0], poses[:,1], c=colors, s=sizes, alpha=0.5)
-            fig.colorbar(points, ax=axis)
+            #self.debug('READY')
+            #self.debug(poses)
+            if len(poses):
+                points = axis.scatter(poses[:,0], poses[:,1], c=colors, s=sizes, alpha=0.5)
+                fig.colorbar(points, ax=axis)
 
             axis.set_title('Scores of constraints ' + name)
             axis.xaxis.set_tick_params(labelbottom=True)
