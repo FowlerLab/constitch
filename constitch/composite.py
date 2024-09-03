@@ -1,4 +1,5 @@
 import sys
+import time
 import collections
 import pickle
 import math
@@ -87,13 +88,24 @@ class BBoxList:
     def __str__(self):
         return "BBoxList(pos1={}, pos2={})".format(self.pos1, self.pos2)
 
+class SequentialExecutorFuture:
+    def __init__(self, func, args, kwargs):
+        self.func = func
+        self.args = args
+        self.kwargs = kwargs
+
+    def result(self):
+        return self.func(*self.args, **self.kwargs)
+
 
 class SequentialExecutor(concurrent.futures.Executor):
     def submit(self, func, *args, **kwargs):
-        result = func(*args, **kwargs)
-        future = concurrent.futures.Future()
-        future.set_result(result)
-        return future
+        return SequentialExecutorFuture(func, args, kwargs)
+        
+        #result = func(*args, **kwargs)
+        #future = concurrent.futures.Future()
+        #future.set_result(result)
+        #return future
 
 
 class CompositeImage:
@@ -948,10 +960,14 @@ class CompositeImage:
                 warnings.warn("Stage model filtered out over 20% of constraints as outilers."
                         " It may have hyperoptimized to the data, make sure all are actually outliers")
 
+            self.debug("Estimated stage model", model, "with an r2 score of", model.score(est_poses[model.inlier_mask_], const_poses[model.inlier_mask_]),
+                    ", classifying {}/{} constraints as outliers".format(np.sum(~model.inlier_mask_), len(self.constraints)))
+
             for (i,j) in indices[~model.inlier_mask_]:
                 del self.constraints[(i,j)]
 
             model = model.estimator_
+
             """
             error = model.predict(est_poses) - const_poses
             print (error.astype(int))
@@ -965,8 +981,8 @@ class CompositeImage:
                 for (i,j) in indices[mask]:
                     del self.constraints[(i,j)]
             """
-
-        self.debug("Estimated stage model", model, "with an r2 score of", model.score(est_poses, const_poses))
+        else:
+            self.debug("Estimated stage model", model, "with an r2 score of", model.score(est_poses, const_poses))
 
         if (model.predict([[0] * est_poses.shape[1]]).max() > const_poses.max() * 100 or 
                 model.predict([[1] * est_poses.shape[1]]).max() > const_poses.max() * 100):
@@ -1037,6 +1053,9 @@ class CompositeImage:
         if pairs is None:
             pairs = self.find_unconstrained_pairs()
 
+        if self.stage_model is None:
+            self.estimate_stage_model()
+
         constraints = {} if return_constraints else self.constraints
 
         start_size = len(constraints)
@@ -1046,13 +1065,29 @@ class CompositeImage:
             assert (max(abs(dx), abs(dy)) <= max(self.boxes[i].size()[:2])), (
                 "Image offset from stage model does not contain any overlap."
                 " The stage model may not have correctly modeled the movement")
-            score = score_offset(self.images[i], self.images[j], dx, dy) * score_multiplier
+            #score = score_offset(self.images[i], self.images[j], dx, dy) * score_multiplier
+            score = 0.2
             constraints[(i,j)] = Constraint(score=score, dx=dx, dy=dy, modeled=True)
 
         self.debug('Added', len(constraints) - start_size, 'calculated constraints using stage model')
 
         if return_constraints:
             return constraints
+
+    def inspect_constraint(self, pair, save_path=None):
+        image1, image2 = self.images[pair[0]], self.images[pair[1]]
+        constraint = self.constraints[pair]
+        x1, y1 = max(0, -constraint.dx), max(0, -constraint.dy)
+        x2, y2 = max(0, constraint.dx), max(0, constraint.dy)
+        new_image = np.zeros((2, max(x1 + image1.shape[0], x2 + image2.shape[0]),
+                max(y1 + image1.shape[1], y2 + image2.shape[1])), dtype=image1.dtype)
+        new_image[0,x1:x1+image1.shape[0],y1:y1+image1.shape[1]] = image1
+        new_image[1,x2:x2+image2.shape[0],y2:y2+image2.shape[1]] = image2
+
+        if save_path is None:
+            return new_image
+        else:
+            skimage.io.imsave(save_path, new_image)
 
     def score_positions(self, pairs=None):
         """ Scores the current position of images using the normalized cross correlation of each overlapping
@@ -1078,8 +1113,10 @@ class CompositeImage:
         for index, ((id1, id2), constraint) in enumerate(constraints.items()):
             dx, dy = constraint.dx, constraint.dy
             score = max(0, constraint.score)
-            score = constraint.score * constraint.score
-            score = max(0.000001, score)
+            score = 0.1 + score
+            #score = 0.5 + score
+            #score = 0.5 + constraint.score * constraint.score
+            #score = max(0.000001, score)
 
             solution_mat[index*2, id1*2] = -score
             solution_mat[index*2, id2*2] = score
@@ -1095,7 +1132,8 @@ class CompositeImage:
 
         return solution_mat, solution_vals
 
-    def solve_constraints(self, apply_positions=True, filter_outliers=False, max_outlier_ratio=0.9, outlier_threshold=5, ignore_bad_constraints=False, scores_plot_path=None, use_outiler_model=False):
+    def solve_constraints(self, apply_positions=True, filter_outliers=False, max_outlier_ratio=0.75, outlier_threshold=5,
+                replace_with_modeled=False, ignore_bad_constraints=False, scores_plot_path=None, use_outiler_model=False):
         """ Solves all contained constraints to get absolute image positions.
 
         This is done by constructing a set of linear equations, with every constraint
@@ -1121,7 +1159,10 @@ class CompositeImage:
             i = 0
             while True:
                 solution_mat, solution_vals = self.make_constraint_matrix(constraints)
+                print ('start')
+                begin = time.time()
                 solution, residuals, rank, sing = np.linalg.lstsq(solution_mat, solution_vals, rcond=None)
+                print ('end', time.time() - begin)
                 poses = solution.reshape(-1,2)
 
                 max_consts = {}
@@ -1149,19 +1190,33 @@ class CompositeImage:
                 if len(constraints) < len(self.constraints) * max_outlier_ratio:
                     break
 
+                pairs = []
                 self.debug ('before filter', len(constraints))
                 for dist, (id1, id2) in max_consts.values():
                     if dist >= max(outlier_threshold, max_dist * 0.2) and dist >= max_consts[id1][0] and dist >= max_consts[id1][0]:
-                        if (id1, id2) in constraints:
+                        if (id1, id2) in constraints and (not replace_with_modeled or not constraints[id1,id2].modeled):
                             #self.debug ('del', id1, id2)
                             del constraints[(id1, id2)]
+                            pairs.append((id1, id2))
                 self.debug ('after filter', len(constraints))
+
+                if len(pairs) == 0:
+                    break
+
+                if replace_with_modeled:
+                    new_consts = self.model_constraints(pairs, return_constraints=True)
+                    constraints.update(new_consts)
 
                 if scores_plot_path:
                     tmp = self.constraints
+                    tmp2 = self.boxes
+                    poses = np.round(solution.reshape(-1,2)).astype(int)
+                    poses -= poses.min(axis=0).reshape(1,2)
+                    self.boxes = BBoxList(poses, poses + self.boxes.size())
                     self.constraints = constraints
                     self.plot_scores(scores_plot_path.format(i), score_func=self.constraint_accuracy)
                     self.constraints = tmp
+                    self.boxes = tmp2
                 i += 1
 
         #if use_outiler_model:
