@@ -16,7 +16,7 @@ import warnings
 from .alignment import calculate_offset, score_offset
 from .stage_model import SimpleOffsetModel, GlobalStageModel
 from .constraints import Constraint
-from . import merging, alignment
+from . import merging, alignment, solving
 from .. import utils
 
 
@@ -1132,7 +1132,75 @@ class CompositeImage:
 
         return solution_mat, solution_vals
 
-    def solve_constraints(self, apply_positions=True, filter_outliers=False, max_outlier_ratio=0.75, outlier_threshold=5,
+    def solve_constraints(self, constraints=None, solver=None, apply_positions=True, ignore_bad_constraints=False):
+        """ Solves all contained constraints to get absolute image positions.
+
+        This is done by constructing a set of linear equations, with every constraint
+        being an equation of the positions of the two images.
+        Scores are incorporated by multiplying the whole equation by the score value,
+        as the solution with the least squared error is found, prioritizing solution
+        that use highly scored constraints.
+
+        Args:
+            apply_positions: (bool)
+                Whether the solved positions should be applied to the images in the composite.
+                If True the current image positions are overwritten.
+
+            Returns: np.ndarray shape (len(images), n_dims)
+                The solved positions of images.
+        """
+        solver = solver or solving.OutlierSolver()
+        constraints = constraints or self.constraints.copy()
+        #constraints = dict(list(constraints.items())[:20])
+        #def in_range(val):
+            #return 5 <= val % 23 <= 10 and 6 <= val // 23 <= 11
+        #constraints = {pair: const for pair, const in constraints.items() if in_range(pair[0]) and in_range(pair[1])}
+        #constraints = {pair: const for pair, const in constraints.items() if pair[1] < 20}
+        result = solver.solve(constraints)
+
+        if type(result) == tuple and len(result) == 2:
+            poses, inlier_mask = result
+            for pair in np.array(list(constraints.keys()))[~np.asarray(inlier_mask)]:
+                del constraints[pair]
+        else:
+            poses = result
+
+        diffs = []
+        for (id1, id2), constraint in constraints.items():
+            new_offset = poses[id2] - poses[id1]
+            diffs.append((new_offset[0] - constraint.dx, new_offset[1] - constraint.dy))
+
+        diffs = np.abs(np.array(diffs))
+
+        self.debug("Solved", len(constraints), "constraints, with error: min {} max".format(
+                np.percentile(diffs, (0,1,5,50,95,99,100)).astype(int)))
+
+        if diffs.max() > 50:
+            if ignore_bad_constraints:
+                warnings.warn(("Final solution has some constraints that are off by more than 50px. "
+                        "This usually means that some erronious constraints were still present before "
+                        "solving. Make sure you performed all proper filtering steps before solving."))
+            else:
+                raise ValueError(("Final solution has some constraints that are off by more than 50px. "
+                        "This usually means that some erronious constraints were still present before "
+                        "solving. Make sure you performed all proper filtering steps before solving."))
+
+        if apply_positions:
+            #self.boxes.pos2[:] = self.boxes.size()
+            #self.boxes.pos1[:] = 0
+            for i in poses.keys():
+                self.boxes[i].pos2[:2] = poses[i] + self.boxes[i].size()[:2]
+                self.boxes[i].pos1[:2] = poses[i]
+            #for i, box in enumerate(self.boxes):
+                #box.pos2[:2] = poses[i] + box.pos2[:2] - box.pos1[:2]
+                #box.pos1[:2] = poses[i]
+
+        self.constraints = constraints
+
+        return self.boxes.pos1
+
+
+    def solve_constraints_old(self, apply_positions=True, filter_outliers=False, max_outlier_ratio=0.75, outlier_threshold=5,
                 replace_with_modeled=False, ignore_bad_constraints=False, scores_plot_path=None, use_outiler_model=False):
         """ Solves all contained constraints to get absolute image positions.
 
