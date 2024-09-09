@@ -3,6 +3,7 @@ import time
 import numpy as np
 import sklearn.linear_model
 import skimage.io
+import scipy.optimize
 
 from .constraints import Constraint
 
@@ -11,13 +12,12 @@ class Solver:
     and solves them into global positions
     """
 
-    def solve(self, constraints):
-        """ Solve the global positions for images given the constraints.
+    def solve(self, constraints, initial_poses):
+        """ Solve the global positions for images given the constraints and estimated positions.
         returns the xy position for each image, mapping the image index to the position
         with a dictionary.
-        Additionally a boolean mask can be returned as a second parameter
-        that specifies the constraints that were classified as inliers,
-        and should be kept.
+        Additionally the constraints dictionary can be returned as the second return value, which
+        will replace the constraints in the composite with the ones returned, filtering outliers.
         """
         pass
 
@@ -30,9 +30,8 @@ class LinearSolver:
     def __init__(self, model=None):
         self.model = model or sklearn.linear_model.LinearRegression(fit_intercept=False)
 
-    #def make_constraint_matrix(self, constraints):
-    def solve(self, constraints):
-        image_indices = sorted(list(set(pair[0] for pair in constraints) | set(pair[1] for pair in constraints)))
+    def make_constraint_matrix(self, constraints, initial_poses):
+        image_indices = sorted(list(initial_poses.keys()))
         solution_mat = np.zeros((len(constraints)*2+2, len(image_indices)*2))
         solution_vals = np.zeros(len(constraints)*2+2)
         
@@ -53,14 +52,22 @@ class LinearSolver:
         solution_mat[-2, 0] = 1
         solution_mat[-1, 1] = 1
 
-        solution = self.solve_matrix(solution_mat, solution_vals)
+        initial_values = np.array(list(initial_poses.values()))
+
+        return solution_mat, solution_vals, initial_values
+
+    def solve(self, constraints, initial_poses):
+        #image_indices = sorted(list(set(pair[0] for pair in constraints) | set(pair[1] for pair in constraints)))
+        solution_mat, solution_vals, initial_values = self.make_constraint_matrix(constraints, initial_poses)
+
+        solution = self.solve_matrix(solution_mat, solution_vals, initial_values)
 
         poses = np.round(solution.reshape(-1,2)).astype(int)
         poses -= poses.min(axis=0).reshape(1,2)
 
-        return dict(zip(image_indices, poses))
+        return dict(zip(list(initial_poses.keys()), poses))
 
-    def solve_matrix(self, solution_mat, solution_vals):
+    def solve_matrix(self, solution_mat, solution_vals, initial_values):
         #solution, residuals, rank, sing = np.linalg.lstsq(solution_mat, solution_vals, rcond=None)
         model = self.model.fit(solution_mat, solution_vals)
         solution = model.coef_
@@ -68,6 +75,46 @@ class LinearSolver:
 
     def score_func(self, constraint):
         return max(0, constraint.score) + 0.1
+
+class OptimalSolver(LinearSolver):
+    def __init__(self, **kwargs):
+        super().__init__()
+
+    def solve_matrix(self, solution_mat, solution_vals, initial_values):
+        values = initial_values
+        initial_poses = values.reshape(-1, 2)
+
+        def simple_loss(values):
+            error = np.matmul(solution_mat, values.T) - solution_vals
+            error = 1 / (1 + np.exp(-error / 25)) - 0.5
+            return np.sum(np.abs(error))
+            #return np.sum(error * error)
+
+        result = scipy.optimize.minimize(simple_loss, values)#, options=dict(maxiter=10))
+        values = result.x
+        np.save('tmp_values.npy', values)
+
+        """
+        import matplotlib.pyplot as plt
+        #fig, axes = plt.subplots(ncol=1, nrow=20, figsize=(6, 4*20))
+        fig, axis = plt.subplots(figsize=(15, 15))
+        all_poses = [initial_poses]
+        for i in range(1):
+            print ('optimizing')
+            result = scipy.optimize.minimize(simple_loss, values)#, options=dict(maxiter=10))
+            values = result.x
+            poses = values.reshape(-1, 2)
+            all_poses.append(poses)
+            #axis.scatter(poses[:,0], poses[:,1], s=1)
+        all_poses = np.array(all_poses)
+
+        axis.scatter(all_poses[0,:,0], all_poses[0,:,1])
+        for i in range(all_poses.shape[1]):
+            axis.plot(all_poses[:,i,0], all_poses[:,i,1])
+        fig.savefig('plots/huber_optim.png')
+        """
+
+        return values
 
 class OutlierSolver:
     def __init__(self, solver=None, testing_radius=3):

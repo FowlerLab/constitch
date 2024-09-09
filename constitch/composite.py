@@ -701,13 +701,13 @@ class CompositeImage:
 
     def find_unconstrained_pairs(self, *args, **kwargs):
         """ Finds all pairs of images that overlap based on the estimated positions and
-        that don't already have a constraint.
+        that don't already have a constraint, or that have a constraint with an error value
 
         Returns (np.ndarray shape (N, 2)):
             The sequence of pairs of indices of the images that overlap without constraints.
         """
         pairs = self.find_pairs(*args, **kwargs)
-        mask = [(i,j) not in self.constraints for i,j in pairs]
+        mask = [(i,j) not in self.constraints or self.constraints[i,j].error > 0 for i,j in pairs]
         return pairs[mask]
 
     def prune_pairs(self, pairs):
@@ -789,7 +789,9 @@ class CompositeImage:
             ))
 
         for (index1, index2), future in self.progress(zip(pairs, futures), total=len(futures)):
-            constraints[(index1,index2)] = future.result()
+            result = future.result()
+            if result is not None:
+                constraints[(index1,index2)] = result
 
         if debug and len(constraints) != 0:
             scores = np.array([const.score for const in constraints.values()])
@@ -799,6 +801,31 @@ class CompositeImage:
             return constraints
         else:
             self.constraints.update(constraints)
+
+    def estimate_constraints(self, pairs=None, error=0.3, score=0, return_constraints=False):
+        """ Estimates constraints based on the current stage positions of the images
+        Useful if you are pretty confident in the stage positions as these constraints
+        will keep the calculated ones within a certain range of the stage position.
+        """
+        if pairs is None:
+            pairs = self.find_unconstrained_pairs()
+            print (pairs)
+
+        constraints = {}
+
+        for index1, index2 in pairs:
+            offset = self.boxes[index2].pos1 - self.boxes[index1].pos1
+            cur_error = error
+            if error < 1:
+                cur_error = int(max(*self.boxes[index1].size()[:2], *self.boxes[index2].size()[:2]) * error)
+            constraint = Constraint(dx=offset[0], dy=offset[1], score=score, error=cur_error)
+            constraints[index1,index2] = constraint
+
+        if return_constraints:
+            return constraints
+        else:
+            self.constraints.update(constraints)
+            print (constraints)
 
     def calc_score_threshold(self, num_samples=None, random_state=12345):
         """ Estimates a threshold for selecting constraints with good overlap.
@@ -960,7 +987,8 @@ class CompositeImage:
                 warnings.warn("Stage model filtered out over 20% of constraints as outilers."
                         " It may have hyperoptimized to the data, make sure all are actually outliers")
 
-            self.debug("Estimated stage model", model, "with an r2 score of", model.score(est_poses[model.inlier_mask_], const_poses[model.inlier_mask_]),
+            est_poses, const_poses = est_poses[model.inlier_mask_], const_poses[model.inlier_mask_]
+            self.debug("Estimated stage model", model, "with an r2 score of", model.score(est_poses, const_poses),
                     ", classifying {}/{} constraints as outliers".format(np.sum(~model.inlier_mask_), len(self.constraints)))
 
             for (i,j) in indices[~model.inlier_mask_]:
@@ -990,6 +1018,12 @@ class CompositeImage:
                 " it may have hyperoptimized to the training data.")
 
         self.stage_model = model
+
+        # calculate variance
+        error = model.predict(est_poses) - const_poses
+        print ("Stage model error", np.percentile(np.abs(error), [0,5,50,75,95,100]))
+        error = np.percentile(np.abs(error), 75)
+        self.stage_model_error = error
 
     def filter_outliers(self, pairs=None):
         """ Filters out any constraints that are clearly outliers, ie have a much larger magnitude than
@@ -1024,7 +1058,7 @@ class CompositeImage:
         for pair in pairs[mask]:
             del self.constraints[(pair[0], pair[1])]
 
-    def model_constraints(self, pairs=None, score_multiplier=0.5, return_constraints=False):
+    def model_constraints(self, pairs=None, score_multiplier=0.5, use_stage_model_error=True, error=0, return_constraints=False):
         """ Uses the stored stage model (estimated by estimage_stage_model) to
         fill the specified constraints.
             
@@ -1056,6 +1090,9 @@ class CompositeImage:
         if self.stage_model is None:
             self.estimate_stage_model()
 
+        if use_stage_model_error:
+            error = self.stage_model_error
+
         constraints = {} if return_constraints else self.constraints
 
         start_size = len(constraints)
@@ -1067,7 +1104,7 @@ class CompositeImage:
                 " The stage model may not have correctly modeled the movement")
             #score = score_offset(self.images[i], self.images[j], dx, dy) * score_multiplier
             score = 0.2
-            constraints[(i,j)] = Constraint(score=score, dx=dx, dy=dy, modeled=True)
+            constraints[(i,j)] = Constraint(score=score, dx=dx, dy=dy, modeled=True, error=error)
 
         self.debug('Added', len(constraints) - start_size, 'calculated constraints using stage model')
 
@@ -1132,7 +1169,7 @@ class CompositeImage:
 
         return solution_mat, solution_vals
 
-    def solve_constraints(self, constraints=None, solver=None, apply_positions=True, ignore_bad_constraints=False):
+    def solve_constraints(self, constraints=None, solver=None, apply_positions=True, ignore_bad_constraints=True, filter_outliers=True):
         """ Solves all contained constraints to get absolute image positions.
 
         This is done by constructing a set of linear equations, with every constraint
@@ -1149,19 +1186,14 @@ class CompositeImage:
             Returns: np.ndarray shape (len(images), n_dims)
                 The solved positions of images.
         """
-        solver = solver or solving.OutlierSolver()
+        solver = solver or solving.LinearSolver()
         constraints = constraints or self.constraints.copy()
-        #constraints = dict(list(constraints.items())[:20])
-        #def in_range(val):
-            #return 5 <= val % 23 <= 10 and 6 <= val // 23 <= 11
-        #constraints = {pair: const for pair, const in constraints.items() if in_range(pair[0]) and in_range(pair[1])}
-        #constraints = {pair: const for pair, const in constraints.items() if pair[1] < 20}
-        result = solver.solve(constraints)
+        result = solver.solve(constraints, dict(zip(range(len(self.boxes)), self.boxes.pos1)))
 
         if type(result) == tuple and len(result) == 2:
-            poses, inlier_mask = result
-            for pair in np.array(list(constraints.keys()))[~np.asarray(inlier_mask)]:
-                del constraints[pair]
+            poses, constraints = result
+            if filter_outliers:
+                self.constraints = constraints
         else:
             poses = result
 
@@ -1438,6 +1470,9 @@ class CompositeImage:
         groups = [list(range(len(self.boxes)))]
         const_groups = [self.constraints.keys()]
         names = ['']
+        if score_func == 'accuracy':
+            score_func = self.constraint_accuracy
+
         if self.boxes[0].pos1.shape[0] == 3:
             groups = []
             const_groups = []

@@ -1,4 +1,5 @@
 import time
+import math
 import sys
 import numpy as np
 import skimage.io
@@ -113,6 +114,10 @@ class FFTAligner(Aligner):
         if previous_constraint is not None:
             score, dx, dy, overlap = find_peaks_estimate(fft, orig_image1, orig_image2, self.num_peaks,
                     estimate=(previous_constraint.dx, previous_constraint.dy), search_range=previous_constraint.error)
+            if score == -math.inf:
+                print (dx, dy, previous_constraint.dx, previous_constraint.dy, previous_constraint.error, score)
+                return
+                #ksdfjls
         else:
             score, dx, dy, overlap = find_peaks(fft, orig_image1, orig_image2, self.num_peaks)
         constraint = Constraint(dx=dx, dy=dy, score=score, overlap=overlap)
@@ -398,7 +403,7 @@ def ncc_fast(image1, image2):
 
 @numba.jit(nopython=True)
 def find_peaks(fft, image1, image2, num_peaks):
-    best_peak = (0.0,0,0,0.0)
+    best_peak = (-math.inf,0,0,0.0)
     shape = (max(image1.shape[0], image2.shape[0]), max(image1.shape[1], image2.shape[1]))
     for i in range(num_peaks):
         peak_index = np.argmax(fft, axis=None)
@@ -428,8 +433,20 @@ def find_peaks(fft, image1, image2, num_peaks):
 
 @numba.jit(nopython=True)
 def find_peaks_estimate(fft, image1, image2, num_peaks, estimate, search_range):
-    best_peak = (0.0,0,0,0.0)
+    best_peak = (-math.inf,0,0,0.0)
     shape = (max(image1.shape[0], image2.shape[0]), max(image1.shape[1], image2.shape[1]))
+
+    for x in range(fft.shape[0]):
+        for y in range(fft.shape[1]):
+            in_range = False
+            for xval in (x, shape[0] - x):
+                for yval in (y, shape[1] - y):
+                    for xval in (xval, -xval):
+                        for yval in (yval, -yval):
+                            in_range = in_range or max(abs(estimate[0] - xval), abs(estimate[1] - yval)) <= search_range
+            if not in_range:
+                fft[x,y] = -np.inf
+
     for i in range(num_peaks):
         peak_index = np.argmax(fft, axis=None)
         xval, yval = peak_index // fft.shape[1], peak_index % fft.shape[1]
@@ -437,8 +454,10 @@ def find_peaks_estimate(fft, image1, image2, num_peaks, estimate, search_range):
             for yval in (yval, shape[1] - yval):
                 for xval in (xval, -xval):
                     for yval in (yval, -yval):
+                        #print ("  checking", xval, yval)
                         if max(abs(estimate[0] - xval), abs(estimate[1] - yval)) > search_range:
                             continue
+                        #print ("  in range")
 
                         section1 = image1[max(0,xval):,max(0,yval):]
                         section2 = image2[max(0,-xval):,max(0,-yval):]
@@ -447,6 +466,7 @@ def find_peaks_estimate(fft, image1, image2, num_peaks, estimate, search_range):
                         section1 = section1[:dim1,:dim2]
                         section2 = section2[:dim1,:dim2]
                         if section1.size == 0: continue
+                        #print ("   real")
 
                         overlap = max(section1.size / image1.size, section2.size / image2.size)
                         peak = (ncc_fast(section1, section2), xval, yval, overlap)
@@ -455,7 +475,7 @@ def find_peaks_estimate(fft, image1, image2, num_peaks, estimate, search_range):
                             best_peak = peak
 
                 if xval < shape[0] and yval < shape[1]:
-                    fft[xval,yval] = 0
+                    fft[xval,yval] = -np.inf
 
     return best_peak
 
