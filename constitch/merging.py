@@ -150,12 +150,9 @@ class EfficientNearestMerger(Merger):
         self.image = np.zeros(image_shape, image_dtype)
         self.dists = np.zeros(image_shape[:2], dtype=np.uint8)
         print (self.image.shape, self.dists.shape, file=sys.stderr)
-        import matplotlib.pyplot as plt
-        self.fig, self.axis = plt.subplots()
 
     def add_image(self, image, location):
         x1, y1, x2, y2 = location[0].start, location[1].start, location[0].stop, location[1].stop
-        self.axis.plot([x1, x1, x2, x2, x1], [y1, y2, y2, y1, y1])
         xdists, ydists = np.arange(image.shape[0]), np.arange(image.shape[1])
         xdists = np.clip(xdists, None, 254).astype(np.uint8)
         ydists = np.clip(ydists, None, 254).astype(np.uint8)
@@ -169,7 +166,6 @@ class EfficientNearestMerger(Merger):
         cur_dists[mask] = dists[mask]
 
     def final_image(self):
-        self.fig.savefig('plots/merger_locations.png')
         return self.image, self.dists != 0
 
 
