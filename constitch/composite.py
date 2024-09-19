@@ -394,7 +394,7 @@ class CompositeImage:
             return iio.improps(image).shape[:2]
         return image.shape[:2]
 
-    def add_images(self, images, positions=None, boxes=None, scale='pixel', imagescale=1):
+    def add_images(self, images, positions=None, boxes=None, scale='pixel', channel_axis=None, imagescale=1):
         """ Adds images to the composite
 
         Args:
@@ -434,6 +434,9 @@ class CompositeImage:
             n_dims = positions.shape[1]
         #assert len(self.imageshape(images[0])) == 2, "Only 2d images are supported"
 
+        if channel_axis is not None:
+            self.multichannel = True
+
         self.n_dims = n_dims
 
         if scale == 'pixel':
@@ -458,7 +461,23 @@ class CompositeImage:
                     positions[i] * scale + imageshape * self.scale * imagescale
                 ))
         
-        self.images.extend(images)
+        #self.images.extend(images)
+        for image in images:
+            if len(image.shape) == 3:
+                if channel_axis is None:
+                    raise ValueError('Expected images of dimension (W, H), got {}'.format(image.shape))
+
+                axes = list(range(3))
+                axes.pop(channel_axis)
+                image = image.transpose(*axes, channel_axis)
+
+            else:
+                if channel_axis is not None:
+                    raise ValueError('Expected images with at least 3 dimensions, as channel_axis is set')
+                if self.multichannel:
+                    image = image.reshape(*image.shape, 1)
+
+            self.images.append(image)
 
     def add_image(self, image, position=None, box=None, scale='pixel', imagescale=1):
         return self.add_images([image], 
@@ -466,7 +485,7 @@ class CompositeImage:
             boxes = box and [box],
             scale = scale, imagescale = imagescale)
 
-    def add_split_image(self, image, num_tiles=None, tile_shape=None, overlap=0.1):
+    def add_split_image(self, image, num_tiles=None, tile_shape=None, overlap=0.1, channel_axis=None):
         """ Adds an image split into a number of tiles. This can be used to divide up
         a large image into smaller peices for efficient processing. The resulting
         images are guaranteed to all be the same size.
@@ -494,6 +513,11 @@ class CompositeImage:
                 and in some cases more overlap will exist between some tiles
         """
         assert num_tiles or tile_shape, "Must specify either num_tiles or tile_shape"
+
+        if channel_axis is not None:
+            axes = list(range(3))
+            axes.pop(channel_axis)
+            image = image.transpose(*axes, channel_axis)
 
         if type(num_tiles) == int:
             num_tiles = (num_tiles, num_tiles)
@@ -534,7 +558,10 @@ class CompositeImage:
                 positions.append((xpos, ypos))
 
         print (positions)
-        self.add_images(images, positions)
+        if channel_axis is None:
+            self.add_images(images, positions)
+        else:
+            self.add_images(images, positions, channel_axis=-1)
     
     def image_positions():
         """ Returns the positions of all images in pixel values
@@ -611,6 +638,39 @@ class CompositeImage:
             for index in selected_images:
                 pass
 
+    def align_disconnected_regions(self):
+        """ Looks at the current constraints in this composite and sees if there are any images or
+        groups of images that are fully disconnected from the rest of the images. If any are found,
+        they are attempted to be joined back together by calculating select constraints between the
+        two groups
+        """
+
+        connections = {}
+        for pair in self.constraints:
+            connections.setdefault(pair[0], []).append(pair[1])
+            connections.setdefault(pair[1], []).append(pair[0])
+
+        def get_connected(image, all_images=None):
+            all_images = all_images or set()
+            if image not in all_images:
+                all_images.add(image)
+                for next_image in connections[image]:
+                    get_connected(next_image, all_images)
+            return all_images
+        
+        groups = []
+        images_left = set(range(len(self.images)))
+        while len(images_left) > 0:
+            start_image = next(iter(images_left))
+            group = get_connected(start_image)
+            images_left -= group
+            groups.append(group)
+        
+        if len(groups) == 1:
+            return
+
+        groups.sort(key=lambda group: -len(group))
+        self.debug('Found', len(groups) - 1, 'disconnected groups, with', list(map(len, groups[1:])), 'sizes')
 
     def subcomposite(self, indices):
         """ Returns a new composite with a subset of the images and constraints in this one.

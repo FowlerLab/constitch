@@ -77,9 +77,10 @@ class FFTAligner(Aligner):
         self.downscale_factor = downscale_factor
 
     def precalculate(self, image, shape=None):
+        if len(image.shape) == 3: image = image[:,:,0]
         #print (image.shape, file=sys.stderr)
         image = self.resize_if_needed(image, shape, downscale_factor=self.downscale_factor)
-        fft = None if not self.precalculate_fft else np.fft.fft2(image)
+        fft = None if not self.precalculate_fft else np.fft.fft2(image, axes=(0,1))
         return image, fft
 
     def align(self, image1, image2, shape1=None, shape2=None, precalc1=None, precalc2=None, previous_constraint=None):
@@ -99,25 +100,26 @@ class FFTAligner(Aligner):
             image1, image2 = image_diff_sizes(image1, image2)
 
         if image1.shape != orig_image1.shape or precalc1 is None or precalc1[1] is None: #precalc[1] would be none if precalculate_fft is false
-            fft1 = np.fft.fft2(image1)
+            fft1 = np.fft.fft2(image1, axes=(0,1))
         else:
             fft1 = precalc1[1].copy() # fft1 is used for in place computation to save mem
 
         if image2.shape != orig_image2.shape or precalc2 is None or precalc2[1] is None:
-            fft2 = np.fft.fft2(image2)
+            fft2 = np.fft.fft2(image2, axes=(0,1))
         else:
             fft2 = precalc2[1]
 
         fft = calc_pcm(fft1.reshape(-1), fft2.reshape(-1)).reshape(fft1.shape)
-        fft = np.fft.ifft2(fft).real
+        fft = np.fft.ifft2(fft, axes=(0,1)).real
+        if len(fft.shape) == 3:
+            fft = fft.sum(axis=2)
 
         if previous_constraint is not None:
             score, dx, dy, overlap = find_peaks_estimate(fft, orig_image1, orig_image2, self.num_peaks,
                     estimate=(previous_constraint.dx, previous_constraint.dy), search_range=previous_constraint.error)
             if score == -math.inf:
-                print (dx, dy, previous_constraint.dx, previous_constraint.dy, previous_constraint.error, score)
+                #print (dx, dy, previous_constraint.dx, previous_constraint.dy, previous_constraint.error, score)
                 return
-                #ksdfjls
         else:
             score, dx, dy, overlap = find_peaks(fft, orig_image1, orig_image2, self.num_peaks)
         constraint = Constraint(dx=dx, dy=dy, score=score, overlap=overlap)
@@ -407,11 +409,11 @@ def find_peaks(fft, image1, image2, num_peaks):
     shape = (max(image1.shape[0], image2.shape[0]), max(image1.shape[1], image2.shape[1]))
     for i in range(num_peaks):
         peak_index = np.argmax(fft, axis=None)
-        xval, yval = peak_index // fft.shape[1], peak_index % fft.shape[1]
-        for xval in (xval, shape[0] - xval):
-            for yval in (yval, shape[1] - yval):
-                for xval in (xval, -xval):
-                    for yval in (yval, -yval):
+        abs_xval, abs_yval = peak_index // fft.shape[1], peak_index % fft.shape[1]
+        for abs_xval in (abs_xval, shape[0] - abs_xval):
+            for abs_yval in (abs_yval, shape[1] - abs_yval):
+                for xval in (abs_xval, -abs_xval):
+                    for yval in (abs_yval, -abs_yval):
                         section1 = image1[max(0,xval):,max(0,yval):]
                         section2 = image2[max(0,-xval):,max(0,-yval):]
                         dim1 = min(section1.shape[0], section2.shape[0])
@@ -426,8 +428,8 @@ def find_peaks(fft, image1, image2, num_peaks):
                         if peak[0] > best_peak[0]:
                             best_peak = peak
 
-                if xval < shape[0] and yval < shape[1]:
-                    fft[xval,yval] = 0
+                if abs_xval < shape[0] and abs_yval < shape[1]:
+                    fft[abs_xval,abs_yval] = -np.inf
 
     return best_peak
 
@@ -449,9 +451,9 @@ def find_peaks_estimate(fft, image1, image2, num_peaks, estimate, search_range):
 
     for i in range(num_peaks):
         peak_index = np.argmax(fft, axis=None)
-        xval, yval = peak_index // fft.shape[1], peak_index % fft.shape[1]
-        for xval in (xval, shape[0] - xval):
-            for yval in (yval, shape[1] - yval):
+        abs_xval, abs_yval = peak_index // fft.shape[1], peak_index % fft.shape[1]
+        for abs_xval in (abs_xval, shape[0] - abs_xval):
+            for abs_yval in (abs_yval, shape[1] - abs_yval):
                 for xval in (xval, -xval):
                     for yval in (yval, -yval):
                         #print ("  checking", xval, yval)
@@ -474,8 +476,8 @@ def find_peaks_estimate(fft, image1, image2, num_peaks, estimate, search_range):
                         if peak[0] > best_peak[0]:
                             best_peak = peak
 
-                if xval < shape[0] and yval < shape[1]:
-                    fft[xval,yval] = -np.inf
+                if abs_xval < shape[0] and abs_yval < shape[1]:
+                    fft[abs_xval,abs_yval] = -np.inf
 
     return best_peak
 
