@@ -309,6 +309,7 @@ class CompositeImage:
         self.set_logging(debug, progress)
         self.set_executor(executor)
         self.set_aligner(aligner)
+        self.multichannel = False
 
         self.precalculate = precalculate
 
@@ -557,7 +558,6 @@ class CompositeImage:
                 images.append(image[xpos:xpos+tile_shape[0],ypos:ypos+tile_shape[1]])
                 positions.append((xpos, ypos))
 
-        print (positions)
         if channel_axis is None:
             self.add_images(images, positions)
         else:
@@ -869,7 +869,6 @@ class CompositeImage:
         """
         if pairs is None:
             pairs = self.find_unconstrained_pairs()
-            print (pairs)
 
         constraints = {}
 
@@ -885,7 +884,6 @@ class CompositeImage:
             return constraints
         else:
             self.constraints.update(constraints)
-            print (constraints)
 
     def calc_score_threshold(self, num_samples=None, random_state=12345):
         """ Estimates a threshold for selecting constraints with good overlap.
@@ -1081,7 +1079,7 @@ class CompositeImage:
 
         # calculate variance
         error = model.predict(est_poses) - const_poses
-        print ("Stage model error", np.percentile(np.abs(error), [0,5,50,75,95,100]))
+        self.debug ("Stage model error", np.percentile(np.abs(error), [0,5,50,75,95,100]))
         error = np.percentile(np.abs(error), 75)
         self.stage_model_error = error
 
@@ -1106,7 +1104,6 @@ class CompositeImage:
         if len(real_pairs) == 0:
             return
         pairs = np.array(real_pairs)
-        print (pairs.shape)
         translations = np.array(translations)
 
         magnitudes = np.sqrt(np.sum(translations * translations, axis=1))
