@@ -78,7 +78,6 @@ class FFTAligner(Aligner):
 
     def precalculate(self, image, shape=None):
         if len(image.shape) == 3: image = image[:,:,0]
-        #print (image.shape, file=sys.stderr)
         image = self.resize_if_needed(image, shape, downscale_factor=self.downscale_factor)
         fft = None if not self.precalculate_fft else np.fft.fft2(image, axes=(0,1))
         return image, fft
@@ -236,9 +235,9 @@ def ncc_slow(image1, image2):
     assert image1.ndim == 2
     assert image2.ndim == 2
     assert np.array_equal(image1.shape, image2.shape)
-    image1 = image1.reshape(-1)
-    image2 = image2.reshape(-1)
-    n = np.dot(image1 - np.mean(image1), image2 - np.mean(image2))
+    image1 = image1.reshape(-1) - np.mean(image1)
+    image2 = image2.reshape(-1) - np.mean(image2)
+    n = np.dot(image1, image2)
     d = np.linalg.norm(image1) * np.linalg.norm(image2)
     return n / d
 
@@ -395,7 +394,9 @@ def ncc_fast(image1, image2):
     total = np.float64(0)
     norm1, norm2 = np.float64(0), np.float64(0)
     for val1, val2 in zip(image1.flat, image2.flat):
-        total += (val1 - mean1) * (val2 - mean2)
+        val1 -= mean1
+        val2 -= mean2
+        total += val1 * val2
         norm1 += val1 * val1
         norm2 += val2 * val2
     denom = np.sqrt(norm1) * np.sqrt(norm2)
@@ -430,7 +431,7 @@ def find_peaks(fft, image1, image2, num_peaks):
 
                 if abs_xval < shape[0] and abs_yval < shape[1]:
                     fft[abs_xval,abs_yval] = -np.inf
-
+    
     return best_peak
 
 @numba.jit(nopython=True)
@@ -454,12 +455,10 @@ def find_peaks_estimate(fft, image1, image2, num_peaks, estimate, search_range):
         abs_xval, abs_yval = peak_index // fft.shape[1], peak_index % fft.shape[1]
         for abs_xval in (abs_xval, shape[0] - abs_xval):
             for abs_yval in (abs_yval, shape[1] - abs_yval):
-                for xval in (xval, -xval):
-                    for yval in (yval, -yval):
-                        #print ("  checking", xval, yval)
+                for xval in (abs_xval, -abs_xval):
+                    for yval in (abs_yval, -abs_yval):
                         if max(abs(estimate[0] - xval), abs(estimate[1] - yval)) > search_range:
                             continue
-                        #print ("  in range")
 
                         section1 = image1[max(0,xval):,max(0,yval):]
                         section2 = image2[max(0,-xval):,max(0,-yval):]
@@ -468,7 +467,6 @@ def find_peaks_estimate(fft, image1, image2, num_peaks, estimate, search_range):
                         section1 = section1[:dim1,:dim2]
                         section2 = section2[:dim1,:dim2]
                         if section1.size == 0: continue
-                        #print ("   real")
 
                         overlap = max(section1.size / image1.size, section2.size / image2.size)
                         peak = (ncc_fast(section1, section2), xval, yval, overlap)
