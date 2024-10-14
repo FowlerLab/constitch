@@ -1,4 +1,5 @@
 import sys
+import random
 import time
 import collections
 import pickle
@@ -44,6 +45,10 @@ class BBox:
 
     def center(self):
         return (self.pos1 + self.pos2) / 2
+
+    def as2d(self):
+        return BBox(self.pos1[:2], self.pos2[:2])
+
 
 
 class BBoxList:
@@ -638,7 +643,7 @@ class CompositeImage:
             for index in selected_images:
                 pass
 
-    def align_disconnected_regions(self):
+    def align_disconnected_regions(self, num_test_points=0.05, expand_range=5):
         """ Looks at the current constraints in this composite and sees if there are any images or
         groups of images that are fully disconnected from the rest of the images. If any are found,
         they are attempted to be joined back together by calculating select constraints between the
@@ -647,9 +652,21 @@ class CompositeImage:
 
         connections = {}
         for pair in self.constraints:
-            connections.setdefault(pair[0], []).append(pair[1])
-            connections.setdefault(pair[1], []).append(pair[0])
+            connections.setdefault(pair[0], set()).add(pair[1])
+            connections.setdefault(pair[1], set()).add(pair[0])
 
+        def get_connected(starting_image):
+            images = set()
+            new_images = {starting_image}
+
+            while len(new_images):
+                images.update(new_images)
+                new_groups = [connections[image] - images for image in new_images]
+                new_images = set().union(*new_groups)
+
+            return images
+
+        """
         def get_connected(image, all_images=None):
             all_images = all_images or set()
             if image not in all_images:
@@ -657,6 +674,7 @@ class CompositeImage:
                 for next_image in connections[image]:
                     get_connected(next_image, all_images)
             return all_images
+            """
         
         groups = []
         images_left = set(range(len(self.images)))
@@ -670,7 +688,86 @@ class CompositeImage:
             return
 
         groups.sort(key=lambda group: -len(group))
-        self.debug('Found', len(groups) - 1, 'disconnected groups, with', list(map(len, groups[1:])), 'sizes')
+        self.debug('Found', len(groups), 'disconnected groups, with', list(map(len, groups)), 'sizes')
+
+        #rng = random.Random(random_state)
+
+        while len(groups) > 1:
+            self.debug ('Merging groups', len(groups[0]), len(groups[1]))
+            #merge two largest groups
+            maingroup = groups[0]
+            newgroup = groups[1]
+            mainboxes = [self.boxes[i] for i in maingroup]
+            newboxes = [self.boxes[i] for i in newgroup]
+
+            num_test_points_group = int(num_test_points * (len(maingroup) + len(newgroup)))
+
+            all_poses = self.boxes.center()[list(maingroup|newgroup),:2]
+            self.debug ('   ', all_poses.shape)
+
+            all_poses = []
+            for i in maingroup:
+                if any(self.boxes[i].as2d().overlaps(obox.as2d()) for obox in newboxes):
+                    all_poses.append(self.boxes[i].center()[:2])
+
+            for i in newgroup:
+                if any(self.boxes[i].as2d().overlaps(obox.as2d()) for obox in mainboxes):
+                    all_poses.append(self.boxes[i].center()[:2])
+            all_poses = np.array(all_poses)
+            self.debug (all_poses.shape)
+
+            poses = sklearn.cluster.KMeans(n_clusters=num_test_points_group).fit(all_poses).cluster_centers_
+            """
+            poses = []
+            while len(poses) < num_test_points_group // 2:
+                box = rng.choice(mainboxes)
+                if any(box.overlaps(obox) for obox in newboxes):
+                    poses.append(box.pos1 + box.size()/2)
+
+            while len(poses) < num_test_points_group:
+                box = rng.choice(newboxes)
+                if any(box.overlaps(obox) for obox in mainboxes):
+                    poses.append(box.pos1 + box.size()/2)
+                    """
+
+            align_boxes = [BBox(pos - 1, pos + 1) for pos in poses.astype(int)]
+            matched = False
+
+            thresh = self.calc_score_threshold()
+            expand_amount = self.boxes.size()[:2].max(axis=0).astype(int)
+
+            for i in range(expand_range):
+                self.debug('Testing overlap with expanded box', align_boxes[0].size())
+                pairs = set()
+                for box in align_boxes:
+                    indices1 = [i for i in maingroup if self.boxes[i].as2d().overlaps(box)]
+                    indices2 = [i for i in newgroup if self.boxes[i].as2d().overlaps(box)]
+                    for i in indices1:
+                        pairs.update({(i,j) for j in indices2})
+
+                constraints = self.calc_constraints(pairs=pairs, return_constraints=True)
+                offsets = []
+                for (i,j), constraint in constraints.items():
+                    if constraint.score >= thresh:
+                        offsets.append(self.boxes[i].pos1[:2] - self.boxes[j].pos1[:2])
+                offsets = np.array(offsets)
+                self.debug (' Good constraints:', len(offsets), '/', len(constraints))
+                self.debug (' Offsets:', offsets.mean(axis=0), offsets.std(axis=0), np.percentile(offsets, [0,1,5,50,95,99,100], axis=0))
+
+                if len(offsets) > len(align_boxes) * 0.8:
+                    offset = np.mean(offsets, axis=0).astype(int)
+                    self.debug ('Found offset', offset)
+                    if i != 0:
+                        self.boxes.pos1[list(newgroup),:2] += offset
+                        self.boxes.pos2[list(newgroup),:2] += offset
+                    groups[0] = groups[0] | groups.pop(1)
+                    break
+
+                for box in align_boxes:
+                    box.pos1[:2] -= expand_amount
+                    box.pos2[:2] += expand_amount
+
+
 
     def subcomposite(self, indices):
         """ Returns a new composite with a subset of the images and constraints in this one.
@@ -714,10 +811,13 @@ class CompositeImage:
         """
         self.scale = scale_factor
 
-    def find_pairs(self, overlap_threshold=None, needs_overlap=False, max_pairs=None):
+    def find_pairs(self, indices=None, indices2=None, overlap_threshold=None, needs_overlap=False, max_pairs=None):
         """ Finds all pairs of images that overlap, based on the estimated positions
             
             Args:
+                indices, indices2 (sequence of indices into self.images):
+                    Only looks for pairs in this set of images. Defaults to all images.
+                    if indices2 is specified only finds pairs between indices and indices2
                 overlap_threshold (scalar or ndarray):
                     Specifies the amount of overlap that is necessary to consider
                     two images overlapping, in pixels. Defaults to zero, meaning that
@@ -737,10 +837,22 @@ class CompositeImage:
             Returns: np.ndarray shape (N, 2)
                 The sequence of pairs of indices of the images that overlap.
         """
+        indices = indices if indices is not None else range(len(self.images))
+        indices2 = indices2 if indices2 is not None else indices
+
+        indices, indices2 = list(indices), list(indices2)
+
         pairs = []
-        for i in range(len(self.images)):
+        already_checked = set()
+        for index in indices:
             start_len = len(pairs)
-            for j in range(i+1,len(self.images)):
+            for j in indices2:
+                i = index
+                if j < i: i, j = j, i
+                if (i,j) in already_checked:
+                    continue
+                already_checked.add((i, j))
+
                 box1, box2 = self.boxes[i], self.boxes[j]
                 
                 if overlap_threshold:
@@ -767,7 +879,9 @@ class CompositeImage:
             The sequence of pairs of indices of the images that overlap without constraints.
         """
         pairs = self.find_pairs(*args, **kwargs)
+        self.debug(pairs.shape, 'skdfjl')
         mask = [(i,j) not in self.constraints or self.constraints[i,j].error > 0 for i,j in pairs]
+        self.debug (np.sum(mask))
         return pairs[mask]
 
     def prune_pairs(self, pairs):
@@ -1114,6 +1228,9 @@ class CompositeImage:
 
         for pair in pairs[mask]:
             del self.constraints[(pair[0], pair[1])]
+
+    def filter_inconsistent_constraints(self):
+        pass
 
     def model_constraints(self, pairs=None, score_multiplier=0.5, use_stage_model_error=True, error=0, return_constraints=False):
         """ Uses the stored stage model (estimated by estimage_stage_model) to
