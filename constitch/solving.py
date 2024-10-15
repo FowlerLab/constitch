@@ -122,7 +122,7 @@ class OutlierSolver:
         self.outlier_threshold = 5
         self.testing_radius = testing_radius
 
-    def solve(self, constraints):
+    def solve(self, constraints, initial_poses):
         #new_constraints = self.get_touching(constraints, (264, 265), self.testing_radius)
         #poses = self.solver.solve(new_constraints)
         #image_indices = sorted(list(set(pair[0] for pair in constraints) | set(pair[1] for pair in constraints)))

@@ -1486,7 +1486,7 @@ class CompositeImage:
                     tmp2 = self.boxes
                     poses = np.round(solution.reshape(-1,2)).astype(int)
                     poses -= poses.min(axis=0).reshape(1,2)
-                    self.boxes = BBoxList(poses, poses + self.boxes.size())
+                    self.boxes = BBoxList(poses, poses + self.boxes.size()[:,:2])
                     self.constraints = constraints
                     self.plot_scores(scores_plot_path.format(i), score_func=self.constraint_accuracy)
                     self.constraints = tmp
@@ -1700,7 +1700,7 @@ class CompositeImage:
                 colors.append(score)
                 sizes.append(50 if constraint.modeled else 200)
                 axis.arrow(pos[1] - constraint.dy/2, -pos[0] + constraint.dx/2, constraint.dy/1, -constraint.dx/1,
-                        width=5, head_width=20, length_includes_head=True, color='black')
+                        width=5, head_width=60, length_includes_head=True, color='black')
                 #axis.plot((pos1[0], pos2[0]), (pos1[1], pos2[1]), linewidth=1, color='red' if constraint.modeled else 'black')
             poses = np.array(poses)
 
