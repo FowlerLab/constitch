@@ -849,7 +849,7 @@ class CompositeImage:
             for j in indices2:
                 i = index
                 if j < i: i, j = j, i
-                if (i,j) in already_checked:
+                if i == j or (i,j) in already_checked:
                     continue
                 already_checked.add((i, j))
 
@@ -1229,8 +1229,24 @@ class CompositeImage:
         for pair in pairs[mask]:
             del self.constraints[(pair[0], pair[1])]
 
-    def filter_inconsistent_constraints(self):
-        pass
+    def filter_inconsistent_constraints(self, pairs=None):
+        if pairs is None:
+            pairs = self.constraints.keys()
+
+        connections = {}
+        for pair in self.constraints:
+            connections.setdefault(pair[0], set()).add(pair[1])
+            connections.setdefault(pair[1], set()).add(pair[0])
+
+        for pair in pairs:
+            print ('testing pair', pair)
+            paths = [[pair[0]]]
+            complete_paths = 0
+            for i in range(5):
+                newpaths = []
+                for path in paths:
+                    newpaths.extend(path + [newnode] for newnode in connections[path[-1]])
+
 
     def model_constraints(self, pairs=None, score_multiplier=0.5, use_stage_model_error=True, error=0, return_constraints=False):
         """ Uses the stored stage model (estimated by estimage_stage_model) to
