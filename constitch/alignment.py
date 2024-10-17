@@ -469,7 +469,9 @@ def find_peaks_estimate(fft, image1, image2, num_peaks, estimate, search_range):
                         dim2 = min(section1.shape[1], section2.shape[1])
                         section1 = section1[:dim1,:dim2]
                         section2 = section2[:dim1,:dim2]
-                        if section1.size == 0: continue
+                        # only keeping sections with more than 100px overlap as anything lower
+                        # has a much higher chance of matching well even if its random noise
+                        if section1.size < 100: continue
 
                         overlap = max(section1.size / image1.size, section2.size / image2.size)
                         peak = (ncc_fast(section1, section2), xval, yval, overlap)

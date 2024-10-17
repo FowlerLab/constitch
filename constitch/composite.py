@@ -1458,6 +1458,7 @@ class CompositeImage:
                 max_consts = {}
                 dists = []
                 for index, ((id1, id2), constraint) in enumerate(constraints.items()):
+                    assert (id1 != id2), "Cannot have constraints between same image"
                     new_offset = poses[id2] - poses[id1]
                     diff = (new_offset[0] - constraint.dx, new_offset[1] - constraint.dy)
                     dist = np.sqrt(diff[0] * diff[0] + diff[1] * diff[1])
