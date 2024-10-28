@@ -40,6 +40,12 @@ class BBox:
                   | ((self.pos1 >= otherbox.pos1) & (self.pos1 < otherbox.pos2)))
         return np.all(contains)
 
+    def contains(self, otherbox):
+        if type(otherbox) == BBox:
+            return np.all((self.pos1 <= otherbox.pos1) & (self.pos2 >= otherbox.pos2))
+        else:
+            return np.all((self.pos1 <= otherbox) & (self.pos2 >= otherbox))
+
     def size(self):
         return self.pos2 - self.pos1
 
