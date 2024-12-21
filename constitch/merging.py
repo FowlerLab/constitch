@@ -2,7 +2,7 @@ import sys
 import numpy as np
 import skimage.io
 
-from .. import utils
+from . import utils
 
 class Merger:
     """ Abstract class that specifies the methods required for an image merger.

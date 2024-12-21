@@ -18,7 +18,7 @@ from .alignment import calculate_offset, score_offset
 from .stage_model import SimpleOffsetModel, GlobalStageModel
 from .constraints import Constraint
 from . import merging, alignment, solving
-from .. import utils
+from . import utils
 
 
 
