@@ -116,6 +116,43 @@ class OptimalSolver(LinearSolver):
 
         return values
 
+class MaxOutlierSolver:
+    def __init__(self, solver=None, outlier_threshold=1.5):
+        self.solver = solver or LinearSolver()
+        self.outlier_threshold = outlier_threshold
+
+    def solve(self, constraints, initial_poses):
+        fully_solved = False
+
+        while not fully_solved:
+            poses = self.solver.solve(constraints, initial_poses)
+
+            diffs = []
+            for (id1, id2), constraint in constraints.items():
+                new_offset = poses[id2] - poses[id1]
+                diffs.append((new_offset[0] - constraint.dx, new_offset[1] - constraint.dy))
+            diffs = np.array(diffs)
+            diffs = np.linalg.norm(diffs, axis=1)
+
+            max_diffs = {}
+            for pair, diff in zip(constraints.keys(), diffs):
+                max_diffs[pair[0]] = max(max_diffs.get(pair[0], 0), diff)
+                max_diffs[pair[1]] = max(max_diffs.get(pair[1], 0), diff)
+
+            fully_solved = True
+
+            for pair, diff in zip(list(constraints.keys()), diffs):
+                if diff > self.outlier_threshold and max_diffs[pair[0]] == diff and max_diffs[pair[1]] == diff and not constraints[pair].modeled:
+                    fully_solved = False
+                    del constraints[pair]
+
+            print ('now', len(constraints), 'constraints')
+            break
+
+        return poses, constraints
+
+
+
 class OutlierSolver:
     def __init__(self, solver=None, testing_radius=3):
         self.solver = solver or LinearSolver()
@@ -133,7 +170,7 @@ class OutlierSolver:
         constraints = constraints.copy()
 
         while True:
-            poses = self.solver.solve(constraints)
+            poses = self.solver.solve(constraints, initial_poses)
             #for pos in poses.values():
                 #pos += 1500
 
@@ -148,7 +185,7 @@ class OutlierSolver:
                     np.percentile(diffs, (0,1,5,50,95,99,100)).astype(int)))
 
             if diffs.max() < self.outlier_threshold:
-                return poses
+                return poses, constraints
 
             removal_scores = {}
             for index, (pair, constraint) in enumerate(constraints.items()):
@@ -157,7 +194,7 @@ class OutlierSolver:
                     continue
 
                 new_constraints = self.get_touching(constraints, pair, self.testing_radius)
-                new_poses = self.solver.solve(new_constraints)
+                new_poses = self.solver.solve(new_constraints, initial_poses)
                 del new_constraints[pair]
 
                 before_diffs = []
@@ -166,7 +203,7 @@ class OutlierSolver:
                     before_diffs.append((new_offset[0] - const.dx, new_offset[1] - const.dy))
                 before_diffs = np.array(before_diffs)
 
-                new_poses = self.solver.solve(new_constraints)
+                new_poses = self.solver.solve(new_constraints, initial_poses)
 
                 after_diffs = []
                 for (id1, id2), const in new_constraints.items():
@@ -180,7 +217,7 @@ class OutlierSolver:
                 #print (np.percentile(np.abs(before_diffs), [0,1,5,50,95,99,100]), np.percentile(np.abs(after_diffs), [0,1,5,50,95,99,100]))
 
             if len(removal_scores) == 0:
-                return poses
+                return poses, constraints
 
             max_pair = max(removal_scores.keys(), key=lambda pair: removal_scores[pair])
             del constraints[max_pair]
@@ -209,3 +246,28 @@ class OutlierSolver:
             max_dist -= 1
 
         return {pair: constraints[pair] for pair in pairs}
+
+
+def SelectionSolver(Solver):
+    """ Solver that finds the maximal set of constraints that all align with each other
+    """
+
+    def __init__(self):
+        pass
+
+    def solve(self, constraints, initial_poses):
+        pass
+
+    def find_cycles(self, nodes, edges):
+        cycles = set()
+        for node in nodes:
+            for cycle in find_cycles_node(node, edges):
+                max_elem = cycle.index(max(cycle))
+                cycle = cycle[max_elem:] + cycle[:max_elem]
+                if cycle[1] < cycle[-1]:
+                    cycle = cycle[:1] + cycle[1:][::-1]
+                cycles.add(cycle)
+
+    def find_cycles_node(self, node, edges):
+        pass
+

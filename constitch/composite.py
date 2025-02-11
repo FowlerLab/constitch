@@ -112,11 +112,7 @@ class SequentialExecutorFuture:
 class SequentialExecutor(concurrent.futures.Executor):
     def submit(self, func, *args, **kwargs):
         return SequentialExecutorFuture(func, args, kwargs)
-        
-        #result = func(*args, **kwargs)
-        #future = concurrent.futures.Future()
-        #future.set_result(result)
-        #return future
+
 
 
 class CompositeImage:
@@ -499,7 +495,7 @@ class CompositeImage:
 
     def add_split_image(self, image, num_tiles=None, tile_shape=None, overlap=0.1, channel_axis=None):
         """ Adds an image split into a number of tiles. This can be used to divide up
-        a large image into smaller peices for efficient processing. The resulting
+        a large image into smaller pieces for efficient processing. The resulting
         images are guaranteed to all be the same size.
         A common pattern would be:
 
@@ -893,6 +889,11 @@ class CompositeImage:
     def prune_pairs(self, pairs):
         pass
 
+    def filter_pairs(self, pairs, **kwargs):
+        constraints = self.estimate_constraints(pairs, return_constraints=True)
+        constraints = self.filter_constraints(constraints, **kwargs)
+        return list(constraints.keys())
+
     def test_pairs(self, pairs, scale=16):
         """ Estimates the constraints between the given pairs with scaled down images, and
         removes any that don't seem to have any overlap. Useful when microscope positions are
@@ -997,7 +998,10 @@ class CompositeImage:
             cur_error = error
             if error < 1:
                 cur_error = int(max(*self.boxes[index1].size()[:2], *self.boxes[index2].size()[:2]) * error)
-            constraint = Constraint(dx=offset[0], dy=offset[1], score=score, error=cur_error)
+            overlap_area = np.minimum(self.boxes[index1].size() - offset, self.boxes[index2].size()).prod()
+            total_area = np.minimum(self.boxes[index1].size(), self.boxes[index2].size()).prod()
+            overlap = overlap_area / total_area
+            constraint = Constraint(dx=offset[0], dy=offset[1], score=score, error=cur_error, overlap=overlap)
             constraints[index1,index2] = constraint
 
         if return_constraints:
@@ -1099,7 +1103,55 @@ class CompositeImage:
             return solution1
         return solution2
 
-    def filter_constraints(self, score_threshold=None, remove_modeled=False):
+    def filter_constraints(self, constraints=None, remove_modeled=False, **kwargs):
+        """ Removes constraints that don't meet certain thresholds
+
+        Args:
+            constraints (dict[(int,int), Constraint]): optional
+                The constraints to filter. If not specified defaults to self.constraints.
+                The passed in dict will be modified.
+            min_score, max_score (float): optional
+                Bounds for the scores of the constraints
+        """
+
+        if constraints is None:
+            constraints = self.constraints
+
+        mins, maxes = {}, {}
+        for name, val in kwargs.items():
+            if name[:4] == 'min_':
+                mins[name[4:]] = val
+            elif name[:4] == 'max_':
+                maxes[name[:4]] = val
+            else:
+                raise "Filter arguments must start with min_ or max_"
+
+        for pair, const in list(constraints.items()):
+            if not remove_modeled and const.modeled: continue
+
+            params = dict(
+                dx = const.dx,
+                dy = const.dy,
+                score = const.score,
+                overlap = const.overlap,
+                error = const.overlap,
+                length = (const.dx ** 2 + const.dy ** 2) ** 0.5,
+            )
+
+            status = True
+
+            for name, val in mins.items():
+                status = status and params[name] >= val
+
+            for name, val in maxes.items():
+                status = status and params[name] <= val
+
+            if not status:
+                del constraints[pair]
+
+        return constraints
+
+    def filter_constraints_old(self, score_threshold=None, remove_modeled=False):
         """ Removes constraints that don't meet a score threshold
 
         Args:
@@ -1299,7 +1351,7 @@ class CompositeImage:
                 "Image offset from stage model does not contain any overlap."
                 " The stage model may not have correctly modeled the movement")
             #score = score_offset(self.images[i], self.images[j], dx, dy) * score_multiplier
-            score = 0.2
+            score = 0.1
             constraints[(i,j)] = Constraint(score=score, dx=dx, dy=dy, modeled=True, error=error)
 
         self.debug('Added', len(constraints) - start_size, 'calculated constraints using stage model')
@@ -1511,7 +1563,7 @@ class CompositeImage:
                     poses -= poses.min(axis=0).reshape(1,2)
                     self.boxes = BBoxList(poses, poses + self.boxes.size()[:,:2])
                     self.constraints = constraints
-                    self.plot_scores(scores_plot_path.format(i), score_func=self.constraint_accuracy)
+                    self.plot_scores(scores_plot_path.format(i), score_func=self.constraint_error)
                     self.constraints = tmp
                     self.boxes = tmp2
                 i += 1
@@ -1650,7 +1702,7 @@ class CompositeImage:
 
         full_image, mask = merger.final_image()
 
-        fig.savefig('plots/merger_locations.png')
+        #fig.savefig('plots/merger_locations.png')
 
         if bg_value is not None:
             full_image[mask] = bg_value
@@ -1668,7 +1720,7 @@ class CompositeImage:
         const_groups = [self.constraints.keys()]
         names = ['']
         if score_func == 'accuracy':
-            score_func = self.constraint_accuracy
+            score_func = self.constraint_error
 
         if self.boxes[0].pos1.shape[0] == 3:
             groups = []
@@ -1890,7 +1942,7 @@ class CompositeImage:
 
         fig.savefig(path)
     
-    def constraint_accuracy(self, i, j, constraint):
+    def constraint_error(self, i, j, constraint):
         new_offset = self.boxes[j].pos1[:2] - self.boxes[i].pos1[:2]
         diff = (new_offset[0] - constraint.dx, new_offset[1] - constraint.dy)
         return np.sqrt(diff[0]*diff[0] + diff[1]*diff[1])

@@ -35,11 +35,15 @@ class Aligner:
         pass
 
     # Helper functions for subclasses:
-    def resize_if_needed(self, image, shape=None, downscale_factor=None):
+    def resize_if_needed(self, image, shape=None, downscale_factor=None, padding=None):
         if shape is not None and image.shape != tuple(shape):
             image = skimage.transform.resize(image, shape)
         if downscale_factor is not None and downscale_factor != 1:
             image = skimage.transform.downscale_local_mean(image, downscale_factor)
+        if padding is not None:
+            newimage = np.zeros((image.shape[0] + padding[0], image.shape[1] + padding[1], *image.shape[2:]), image.dtype)
+            newimage[:image.shape[0],:image.shape[1]] = image
+            image = newimage
         return image
     
     def precalculate_if_needed(self, image1, image2, shape1=None, shape2=None, precalc1=None, precalc2=None):
@@ -130,6 +134,55 @@ class FFTAligner(Aligner):
             constraint.error = self.downscale_factor
 
         return constraint
+
+
+class PaddedFFTAligner(FFTAligner):
+
+    def precalculate(self, image, shape=None):
+        if len(image.shape) == 3: image = image[:,:,0]
+        image = self.resize_if_needed(image, shape, downscale_factor=self.downscale_factor, padding=shape)
+        fft = None if not self.precalculate_fft else np.fft.fft2(image, axes=(0,1))
+        return image, fft
+
+    def align(self, image1, image2, shape1=None, shape2=None, precalc1=None, precalc2=None, previous_constraint=None):
+        orig_orig_image1, orig_orig_image2 = image1, image2
+
+        if precalc1 is None:
+            image1 = self.resize_if_needed(image1, shape1, downscale_factor=self.downscale_factor, padding=shape1)
+        else:
+            image1 = precalc1[0]
+
+        if precalc2 is None:
+            image2 = self.resize_if_needed(image2, shape2, downscale_factor=self.downscale_factor, padding=shape2)
+        else:
+            image2 = precalc2[0]
+
+        orig_image1, orig_image2 = image1, image2
+            
+        if image1.shape != image2.shape:
+            image1, image2 = image_diff_sizes(image1, image2)
+
+        if image1.shape != orig_image1.shape or precalc1 is None or precalc1[1] is None: #precalc[1] would be none if precalculate_fft is false
+            fft1 = np.fft.fft2(image1, axes=(0,1))
+        else:
+            fft1 = precalc1[1].copy() # fft1 is used for in place computation to save mem
+
+        if image2.shape != orig_image2.shape or precalc2 is None or precalc2[1] is None:
+            fft2 = np.fft.fft2(image2, axes=(0,1))
+        else:
+            fft2 = precalc2[1]
+
+        fft = calc_pcm(fft1.reshape(-1), fft2.reshape(-1)).reshape(fft1.shape)
+        fft = np.fft.ifft2(fft, axes=(0,1)).real
+        if len(fft.shape) == 3:
+            fft = fft.sum(axis=2)
+            #np.sum(fft, axis=2, 
+
+        dx, dy = np.unravel_index(np.argmax(fft), fft.shape)
+        score = fft[dx,dy]
+        dx, dy = dx % shape1[0], dy % shape1[1]
+        return Constraint(dx=dx, dy=dy, score=score, error=0, overlap=0.1)
+
 
 
 class FeatureAligner(Aligner):

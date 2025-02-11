@@ -44,6 +44,7 @@ from .alignment import calculate_offset, ncc, score_offset, Aligner, FFTAligner,
 from .stitching import stitch_cycles, make_test_image
 from .evaluation import evaluate_stitching, evaluate_grid_stitching
 from .merging import Merger, MeanMerger, EfficientMeanMerger, NearestMerger, MaskMerger, LastMerger, EfficientNearestMerger
+from .solving import LinearSolver, OptimalSolver, OutlierSolver
 
 
 __all__ = [
@@ -69,4 +70,8 @@ __all__ = [
     "MaskMerger",
     "LastMerger",
     "EfficientNearestMerger",
+
+    "LinearSolver",
+    "OptimalSolver",
+    "OutlierSolver",
 ]
