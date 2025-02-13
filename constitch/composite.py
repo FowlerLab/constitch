@@ -16,7 +16,7 @@ import warnings
 
 from .alignment import calculate_offset, score_offset
 from .stage_model import SimpleOffsetModel, GlobalStageModel
-from .constraints import Constraint
+from .constraints import Constraint, ConstraintType, ConstraintSet
 from . import merging, alignment, solving
 from . import utils
 
@@ -46,9 +46,11 @@ class BBox:
         else:
             return np.all((self.pos1 <= otherbox) & (self.pos2 >= otherbox))
 
+    @property
     def size(self):
         return self.pos2 - self.pos1
 
+    @property
     def center(self):
         return (self.pos1 + self.pos2) / 2
 
@@ -310,7 +312,9 @@ class CompositeImage:
         self.images = []
         self.greyimages = []
         self.boxes = BBoxList()
-        self.constraints = {}
+        #self.constraints = {}
+        self._constraints = collections.defaultdict(list)
+        self.constraints_update_count = 1
         self.scale = 1
         self.stage_model = None
         self.set_logging(debug, progress)
@@ -352,7 +356,7 @@ class CompositeImage:
 
         obj = dict(
             boxes = (self.boxes.pos1, self.boxes.pos2),
-            constraints = self.constraints,
+            constraints = self._constraints,
             scale = self.scale,
             stage_model = self.stage_model,
             debug = bool(self.debug),
@@ -569,8 +573,70 @@ class CompositeImage:
             self.add_images(images, positions)
         else:
             self.add_images(images, positions, channel_axis=-1)
-    
-    def image_positions():
+
+
+    def newconstraints(self):
+        return ConstraintSet(self).filter(type=ConstraintType.IMPLICIT)
+
+    def constraints(self):
+        return ConstraintSet(self).filter(type=ConstraintType.NORMAL)
+
+    def constraintiter(self, type=None, pairs=None):
+        if pairs is None:
+            if type is None or type == ConstraintType.IMPLICIT:
+                def all_pairs():
+                    for i in range(len(self.images)):
+                        for j in range(i+1, len(self.images)):
+                            yield i,j
+                pairs = all_pairs()
+            else:
+                pairs = self._constraints.keys()
+
+        for pair in pairs:
+            if pair[0] >= pair[1]: continue
+            curlist = self._constraints[pair]
+            if len(curlist) != 0 and type != ConstraintType.IMPLICIT:
+                yield curlist[0]
+            elif type is None or type == ConstraintType.IMPLICIT:
+                yield Constraint(self, i, j)
+
+    def add_constraint(self, newconst):
+        self.constraints_update_count += 1
+        curlist = self._constraints[newconst.index1,newconst.index2]
+        index = 0
+        while index < len(curlist) and curlist[index].error < newconst.error:
+            index += 1
+        curlist.insert(index, newconst)
+        return curlist[0]
+
+    def remove_constraint(self, const):
+        self.constraints_update_count += 1
+        curlist = self._constraints[const.index1,const.index2]
+        index = curlist.index(const)
+        curlist.pop(index)
+        if len(curlist) == 0:
+            return Constraint(self, const.index1, const.index2, type=ConstraintType.IMPLICIT)
+        else:
+            return curlist[0]
+
+    def add_constraints(self, constraints):
+        pairs = []
+        for const in constraints:
+            self.add_constraint(const)
+            pairs.append((const.index1, const.index2))
+        return ConstraintSet(self, pairs=pairs)
+
+    def apply(self, positions):
+        """ Applies new positions to images in this composite. positions is either a dict
+        mapping image indices to new positions or a sequence of new positions.
+        """
+        if type(positions) == dict:
+            for index, pos in positions.items():
+                self.boxes[index].pos2[:] = pos + self.boxes[index].size
+                self.boxes[index].pos1[:] = pos
+
+
+    def image_positions(self):
         """ Returns the positions of all images in pixel values
         """
         return np.array([box.pos1 for box in self.boxes])
@@ -704,17 +770,17 @@ class CompositeImage:
 
             num_test_points_group = int(num_test_points * (len(maingroup) + len(newgroup)))
 
-            all_poses = self.boxes.center()[list(maingroup|newgroup),:2]
+            all_poses = self.boxes.center[list(maingroup|newgroup),:2]
             self.debug ('   ', all_poses.shape)
 
             all_poses = []
             for i in maingroup:
                 if any(self.boxes[i].as2d().overlaps(obox.as2d()) for obox in newboxes):
-                    all_poses.append(self.boxes[i].center()[:2])
+                    all_poses.append(self.boxes[i].center[:2])
 
             for i in newgroup:
                 if any(self.boxes[i].as2d().overlaps(obox.as2d()) for obox in mainboxes):
-                    all_poses.append(self.boxes[i].center()[:2])
+                    all_poses.append(self.boxes[i].center[:2])
             all_poses = np.array(all_poses)
             self.debug (all_poses.shape)
 
@@ -724,22 +790,22 @@ class CompositeImage:
             while len(poses) < num_test_points_group // 2:
                 box = rng.choice(mainboxes)
                 if any(box.overlaps(obox) for obox in newboxes):
-                    poses.append(box.pos1 + box.size()/2)
+                    poses.append(box.pos1 + box.size/2)
 
             while len(poses) < num_test_points_group:
                 box = rng.choice(newboxes)
                 if any(box.overlaps(obox) for obox in mainboxes):
-                    poses.append(box.pos1 + box.size()/2)
+                    poses.append(box.pos1 + box.size/2)
                     """
 
             align_boxes = [BBox(pos - 1, pos + 1) for pos in poses.astype(int)]
             matched = False
 
             thresh = self.calc_score_threshold()
-            expand_amount = self.boxes.size()[:2].max(axis=0).astype(int)
+            expand_amount = self.boxes.size[:2].max(axis=0).astype(int)
 
             for i in range(expand_range):
-                self.debug('Testing overlap with expanded box', align_boxes[0].size())
+                self.debug('Testing overlap with expanded box', align_boxes[0].size)
                 pairs = set()
                 for box in align_boxes:
                     indices1 = [i for i in maingroup if self.boxes[i].as2d().overlaps(box)]
@@ -953,7 +1019,7 @@ class CompositeImage:
         constraints = {}
 
         if precalculate:
-            precalcs = [self.executor.submit(precalc_job, aligner=self.aligner, image=image, shape=box.size()[:2])
+            precalcs = [self.executor.submit(precalc_job, aligner=self.aligner, image=image, shape=box.size[:2])
                         for image,box in zip(self.images, self.boxes)]
             precalcs = [future.result() for future in self.progress(precalcs)]
         else:
@@ -965,7 +1031,7 @@ class CompositeImage:
                 aligner = self.aligner,
                 image1 = self.images[index1], image2 = self.images[index2],
                 precalc1 = precalcs[index1], precalc2 = precalcs[index2],
-                shape1 = self.boxes[index1].size()[:2], shape2 = self.boxes[index2].size()[:2],
+                shape1 = self.boxes[index1].size[:2], shape2 = self.boxes[index2].size[:2],
                 previous_constraint = self.constraints.get((index1, index2), None) if use_previous_constraints else None,
             ))
 
@@ -997,9 +1063,9 @@ class CompositeImage:
             offset = self.boxes[index2].pos1 - self.boxes[index1].pos1
             cur_error = error
             if error < 1:
-                cur_error = int(max(*self.boxes[index1].size()[:2], *self.boxes[index2].size()[:2]) * error)
-            overlap_area = np.minimum(self.boxes[index1].size() - offset, self.boxes[index2].size()).prod()
-            total_area = np.minimum(self.boxes[index1].size(), self.boxes[index2].size()).prod()
+                cur_error = int(max(*self.boxes[index1].size[:2], *self.boxes[index2].size[:2]) * error)
+            overlap_area = np.minimum(self.boxes[index1].size - offset, self.boxes[index2].size).prod()
+            total_area = np.minimum(self.boxes[index1].size, self.boxes[index2].size).prod()
             overlap = overlap_area / total_area
             constraint = Constraint(dx=offset[0], dy=offset[1], score=score, error=cur_error, overlap=overlap)
             constraints[index1,index2] = constraint
@@ -1347,7 +1413,7 @@ class CompositeImage:
         for i,j in pairs:
             dx, dy = self.stage_model.predict(np.array([self.boxes[i].pos1, self.boxes[j].pos1]).reshape(1,-1)).flatten().astype(int)
             #dx, dy = self.stage_model.predict((self.boxes[j].pos1 - self.boxes[i].pos1).reshape(1,-1)).flatten().astype(int)
-            assert (max(abs(dx), abs(dy)) <= max(self.boxes[i].size()[:2])), (
+            assert (max(abs(dx), abs(dy)) <= max(self.boxes[i].size[:2])), (
                 "Image offset from stage model does not contain any overlap."
                 " The stage model may not have correctly modeled the movement")
             #score = score_offset(self.images[i], self.images[j], dx, dy) * score_multiplier
@@ -1466,10 +1532,10 @@ class CompositeImage:
                         "solving. Make sure you performed all proper filtering steps before solving."))
 
         if apply_positions:
-            #self.boxes.pos2[:] = self.boxes.size()
+            #self.boxes.pos2[:] = self.boxes.size
             #self.boxes.pos1[:] = 0
             for i in poses.keys():
-                self.boxes[i].pos2[:2] = poses[i] + self.boxes[i].size()[:2]
+                self.boxes[i].pos2[:2] = poses[i] + self.boxes[i].size[:2]
                 self.boxes[i].pos1[:2] = poses[i]
             #for i, box in enumerate(self.boxes):
                 #box.pos2[:2] = poses[i] + box.pos2[:2] - box.pos1[:2]
@@ -1561,7 +1627,7 @@ class CompositeImage:
                     tmp2 = self.boxes
                     poses = np.round(solution.reshape(-1,2)).astype(int)
                     poses -= poses.min(axis=0).reshape(1,2)
-                    self.boxes = BBoxList(poses, poses + self.boxes.size()[:,:2])
+                    self.boxes = BBoxList(poses, poses + self.boxes.size[:,:2])
                     self.constraints = constraints
                     self.plot_scores(scores_plot_path.format(i), score_func=self.constraint_error)
                     self.constraints = tmp
@@ -1754,7 +1820,7 @@ class CompositeImage:
 
             for i,index in enumerate(indices):
                 x, y = self.boxes[index].pos1[:2]
-                width, height = self.boxes[index].size()[:2]
+                width, height = self.boxes[index].size[:2]
                 axis.text(y + height / 2, -x - width / 2, "{}\n({})".format(index, i), horizontalalignment='center', verticalalignment='center')
                 axis.add_patch(matplotlib.patches.Rectangle((y, -x - width), height, width, edgecolor='grey', facecolor='none'))
 
@@ -1766,7 +1832,7 @@ class CompositeImage:
             for i,j in const_pairs:
                 constraint = self.constraints[(i,j)]
 
-                pos1, pos2 = self.boxes[i].center()[:2], self.boxes[j].center()[:2]
+                pos1, pos2 = self.boxes[i].center[:2], self.boxes[j].center[:2]
                 #if np.all(pos1 == pos2):
                     #print (i, j, constraint)
                 pos = np.mean((pos1, pos2), axis=0)
@@ -1827,16 +1893,16 @@ class CompositeImage:
             rect = ET.SubElement(group, 'rect', attrib={
                 "class": "fade-hover",
                 "x": str(box.pos1[0]), "y": str(box.pos1[1]),
-                "width": str(box.size()[0]), "height": str(box.size()[1]),
+                "width": str(box.size[0]), "height": str(box.size[1]),
                 "stroke": 'black', "fill": 'transparent',
-                "stroke-width": str(int(box.size()[:2].min()) // 10),
+                "stroke-width": str(int(box.size[:2].min()) // 10),
             })
 
             text = ET.SubElement(group, 'text', attrib={
                 "class": "show-hover",
-                "x": str(box.pos1[0] + box.size()[0] // 2),
-                "y": str(box.pos1[1] + box.size()[1] * 2 // 3),
-                "font-size": str(box.size()[1] // 2),
+                "x": str(box.pos1[0] + box.size[0] // 2),
+                "y": str(box.pos1[1] + box.size[1] * 2 // 3),
+                "font-size": str(box.size[1] // 2),
                 "text-anchor": "middle",
             })
             text.text = str(i)
@@ -1856,33 +1922,33 @@ class CompositeImage:
                 "x2": str(center[0] + constraint.dx // 2),
                 "y2": str(center[1] + constraint.dy // 2),
                 "stroke": "rgb(50% {}% 50%)".format(int(constraint.score * 100)),
-                "stroke-width": str(min(box1.size()[:2].min(), box2.size()[:2].min()) // 2),
+                "stroke-width": str(min(box1.size[:2].min(), box2.size[:2].min()) // 2),
                 "stroke-linecap": "round",
             })
 
             line = ET.SubElement(group, 'line', attrib={
                 "class": "show-hover",
-                "x1": str(box1.pos1[0] + box1.size()[0] / 2),
-                "y1": str(box1.pos1[1] + box1.size()[1] / 2),
-                "x2": str(box2.pos1[0] + box2.size()[0] / 2),
-                "y2": str(box2.pos1[1] + box2.size()[1] / 2),
+                "x1": str(box1.pos1[0] + box1.size[0] / 2),
+                "y1": str(box1.pos1[1] + box1.size[1] / 2),
+                "x2": str(box2.pos1[0] + box2.size[0] / 2),
+                "y2": str(box2.pos1[1] + box2.size[1] / 2),
                 "stroke": "black",
-                "stroke-width": str(min(box1.size()[:2].min(), box2.size()[:2].min()) // 40),
+                "stroke-width": str(min(box1.size[:2].min(), box2.size[:2].min()) // 40),
             })
 
             #"""
             rect = ET.SubElement(group, 'rect', attrib={
                 "class": "show-hover",
                 "x": str(box1.pos1[0]), "y": str(box1.pos1[1]),
-                "width": str(box1.size()[0]), "height": str(box1.size()[1]),
+                "width": str(box1.size[0]), "height": str(box1.size[1]),
                 "stroke": 'black', "fill": 'transparent',
-                "stroke-width": str(int(box1.size().mean()) // 10),
+                "stroke-width": str(int(box1.size.mean()) // 10),
             })
             text = ET.SubElement(group, 'text', attrib={
                 "class": "show-hover",
                 "x": str(box1.pos1[0] if box1.pos1[0] <= box2.pos1[0] else box1.pos2[0]),
-                "y": str(box1.pos1[1] + box1.size()[1] * 2 // 3),
-                "font-size": str(box1.size()[1] // 2),
+                "y": str(box1.pos1[1] + box1.size[1] * 2 // 3),
+                "font-size": str(box1.size[1] // 2),
                 "text-anchor": "end" if box1.pos1[0] <= box2.pos1[0] else "start",
             })
             text.text = str(i)
@@ -1890,15 +1956,15 @@ class CompositeImage:
             rect = ET.SubElement(group, 'rect', attrib={
                 "class": "show-hover",
                 "x": str(box2.pos1[0]), "y": str(box2.pos1[1]),
-                "width": str(box2.size()[0]), "height": str(box2.size()[1]),
+                "width": str(box2.size[0]), "height": str(box2.size[1]),
                 "stroke": 'black', "fill": 'transparent',
-                "stroke-width": str(int(box2.size().mean()) // 10),
+                "stroke-width": str(int(box2.size.mean()) // 10),
             })
             text = ET.SubElement(group, 'text', attrib={
                 "class": "show-hover",
                 "x": str(box2.pos2[0] if box1.pos1[0] <= box2.pos1[0] else box2.pos1[0]),
-                "y": str(box2.pos1[1] + box2.size()[1] * 2 // 3),
-                "font-size": str(box2.size()[1] // 2),
+                "y": str(box2.pos1[1] + box2.size[1] * 2 // 3),
+                "font-size": str(box2.size[1] // 2),
                 "text-anchor": "start" if box1.pos1[0] <= box2.pos1[0] else "end",
             })
             text.text = str(j)

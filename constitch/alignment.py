@@ -118,7 +118,7 @@ class FFTAligner(Aligner):
             fft = fft.sum(axis=2)
             #np.sum(fft, axis=2, 
 
-        if previous_constraint is not None:
+        if previous_constraint is not None and previous_constraint.error is not None:
             score, dx, dy, overlap = find_peaks_estimate(fft, orig_image1, orig_image2, self.num_peaks,
                     estimate=(previous_constraint.dx, previous_constraint.dy), search_range=previous_constraint.error)
             if score == -math.inf:
@@ -126,7 +126,7 @@ class FFTAligner(Aligner):
                 return
         else:
             score, dx, dy, overlap = find_peaks(fft, orig_image1, orig_image2, self.num_peaks)
-        constraint = Constraint(dx=dx, dy=dy, score=score, overlap=overlap)
+        constraint = Constraint(previous_constraint, dx=dx, dy=dy, score=score)
 
         if self.downscale_factor:
             constraint.dx *= self.downscale_factor
@@ -181,7 +181,7 @@ class PaddedFFTAligner(FFTAligner):
         dx, dy = np.unravel_index(np.argmax(fft), fft.shape)
         score = fft[dx,dy]
         dx, dy = dx % shape1[0], dy % shape1[1]
-        return Constraint(dx=dx, dy=dy, score=score, error=0, overlap=0.1)
+        return Constraint(previous_constraint, dx=dx, dy=dy, score=score, error=0)
 
 
 
