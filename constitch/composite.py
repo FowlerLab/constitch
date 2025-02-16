@@ -16,7 +16,7 @@ import warnings
 
 from .alignment import calculate_offset, score_offset
 from .stage_model import SimpleOffsetModel, GlobalStageModel
-from .constraints import Constraint, ConstraintType, ConstraintSet
+from .constraints import Constraint, ConstraintType, ConstraintSet, ImplicitConstraintDict
 from . import merging, alignment, solving
 from . import utils
 
@@ -313,7 +313,9 @@ class CompositeImage:
         self.greyimages = []
         self.boxes = BBoxList()
         #self.constraints = {}
-        self._constraints = collections.defaultdict(list)
+        #self._constraints = collections.defaultdict(list)
+        self.constraints = ConstraintSet()
+        self.constraints.constraints = ImplicitConstraintDict(self, self.pair_func)
         self.constraints_update_count = 1
         self.scale = 1
         self.stage_model = None
@@ -323,6 +325,11 @@ class CompositeImage:
         self.multichannel = False
 
         self.precalculate = precalculate
+
+    def pair_func(self):
+        for i in range(len(self.images)):
+            for j in range(i+1, len(self.images)):
+                yield i, j
 
     def set_executor(self, executor):
         self.executor = executor or SequentialExecutor()

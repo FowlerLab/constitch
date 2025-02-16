@@ -7,6 +7,8 @@ import sklearn.linear_model
 import sklearn.mixture
 import sklearn.base
 
+from . import alignment
+
 class ConversionStageModel(sklearn.base.BaseEstimator):
     def __init__(self, model=None):
         self.model = model or sklearn.linear_model.LinearRegression(fit_intercept=False)
@@ -68,4 +70,15 @@ class GlobalStageModel(ConversionStageModel):
     """
     def conversion_func(self, poses1, poses2):
         return np.concatenate([poses1, poses2], axis=1)
+
+
+class StageModelAligner(alignment.Aligner):
+    def __init__(self, model, error=15):
+        self.model = model
+        self.error = error
+
+    def align(self, image1, image2, shape1=None, shape2=None, precalc1=None, precalc2=None, constraint=None):
+        X = np.array([*constraint.box1.pos1, *constraint.box2.pos1]).reshape(1,-1)
+        y = self.model.predict(X).reshape(-1)
+        newconst = Constraint(constraint, dx=y[0], dy=y[1], score=None, error=self.error)
 

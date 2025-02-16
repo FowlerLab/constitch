@@ -1,8 +1,11 @@
 from typing import Optional
 import dataclasses
 import enum
+import math
+import warnings
 
 import numpy as np
+import sklearn.linear_model
 
 class ConstraintType(enum.Enum):
     NORMAL = 'normal'
@@ -33,6 +36,7 @@ class Constraint:
         if dx is None or dy is None:
             type = ConstraintType.IMPLICIT
             dx, dy = self.box2.pos1[:2] - self.box1.pos1[:2]
+            if error is None: error = math.inf
 
         self.dx = dx
         self.dy = dy
@@ -54,6 +58,10 @@ class Constraint:
     @property
     def implicit(self):
         return self.type == ConstraintType.IMPLICIT
+
+    @property
+    def pair(self):
+        return (self.index1, self.index2)
 
     @property
     def box1(self):
@@ -162,8 +170,7 @@ class ConstraintFilter:
             if getattr(constraint, name) > val: return False
 
         for name, val in self.equals.items():
-            elif getattr(constraint, name) != val:
-                return False
+            if getattr(constraint, name) != val: return False
 
         #print ('    True')
         return True
@@ -197,6 +204,192 @@ class ConstraintFilter:
 
     def alwaystrue(self):
         return self.func is None and len(self.mins) == 0 and len(self.maxes) == 0 and len(self.equals) == 0
+
+#"""
+class ConstraintSet:
+    def __init__(self, constraints=None):
+        self.constraints = {}
+        if constraints:
+            self.add(constraints)
+
+    def add(self, other):
+        if isinstance(other, Constraint):
+            self._add_single(other)
+        else:
+            for const in self._constraint_iter(other):
+                self._add_single(const)
+
+    def remove(self, other):
+        if isinstance(other, Constraint) or (type(other) == tuple and len(other) == 2):
+            self._remove_single(other)
+        else:
+            for const in self._constraint_iter(other):
+                self._remove_single(const)
+
+    def merge(self, other):
+        new_set = ConstraintSet()
+        for const in self._constraint_iter(other):
+            self.add(other)
+
+    def filter(self, obj=None, **kwargs):
+        if isinstance(obj, dict):
+            newset = ConstraintSet()
+            for pair, val in obj.items():
+                for const in self.constraints[pair][int(not val):]:
+                    newset.add(const)
+            return newset
+
+        if obj is None:
+            obj = kwargs
+
+        filters = ConstraintFilter.asfilter(obj)
+        newset = ConstraintSet(filter(filters, self._constraint_iter()))
+        return newset
+
+    def __iter__(self):
+        return iter(const_list[0] for const_list in self.constraints.values())
+
+    def __getitem__(self, pair):
+        return self.constraints[pair][0]
+
+
+    def calculate(self, aligner=None):
+        newset = ConstraintSet(const.calculate(aligner=aligner) for const in self)
+        return newset
+
+    def fit_model(self, model=None, outliers=False, random_state=12345):
+        from . import stage_model
+        model = model or stage_model.SimpleOffsetModel()
+
+        if outliers:
+            model = sklearn.linear_model.RANSACRegressor(model,
+                    min_samples=4,
+                    max_trials=1000,
+                    random_state=random_state)
+
+        est_poses = []
+        const_poses = []
+        indices = []
+        for constraint in self:
+            est_poses.append(np.concatenate([constraint.box1.pos1, constraint.box2.pos1]))
+            const_poses.append((constraint.dx, constraint.dy))
+            indices.append(constraint.pair)
+
+        est_poses, const_poses = np.array(est_poses), np.array(const_poses)
+        indices = np.array(indices)
+
+        model.fit(est_poses, const_poses)
+        #print (model.estimator.model.coef_)
+
+        aligner = stage_model.StageModelAligner(model.estimator_ if outliers else model)
+
+        if outliers:
+            print ('Filtered out', np.sum(~model.inlier_mask_), 'constraints as outliers')
+
+            if np.mean(model.inlier_mask_.astype(int)) < 0.8:
+                warnings.warn("Stage model filtered out over 20% of constraints as outilers."
+                        " It may have hyperoptimized to the data, make sure all are actually outliers")
+
+            est_poses, const_poses = est_poses[model.inlier_mask_], const_poses[model.inlier_mask_]
+            print ("Estimated stage model", model, "with an r2 score of", model.score(est_poses, const_poses),
+                    ", classifying {}/{} constraints as outliers".format(np.sum(~model.inlier_mask_), len(self.constraints)))
+
+            aligner.inliers = dict(zip(self.constraints.keys(), model.inlier_mask_))
+            aligner.outlier = dict(zip(self.constraints.keys(), ~model.inlier_mask_))
+
+        else:
+            print ("Estimated stage model", model, "with an r2 score of", model.score(est_poses, const_poses))
+
+        if (aligner.model.predict([[0] * est_poses.shape[1]]).max() > const_poses.max() * 100 or 
+                aligner.model.predict([[1] * est_poses.shape[1]]).max() > const_poses.max() * 100):
+            warnings.warn("Stage model is predicting very large values for simple constraints,"
+                " it may have hyperoptimized to the training data.")
+
+        # calculate variance
+        error = aligner.model.predict(est_poses) - const_poses
+        error_thresh = np.percentile(np.abs(error), 99)
+        print ("Stage model error", np.percentile(np.abs(error), [0,5,50,75,95,100]), error_thresh)
+        aligner.error = error_thresh
+
+        return aligner
+
+    def solve(self, solver=None):
+        from . import solving
+        solver = solver or solving.LinearSolver()
+        constraints = {}
+        poses = {}
+        for const in self:
+            poses[const.index1] = const.box1.pos1
+            poses[const.index2] = const.box2.pos1
+            constraints[const.pair] = const
+
+        return solver.solve(constraints, poses)
+
+
+    def _add_single(self, constraint):
+        const_list = self.constraints.setdefault(constraint.pair, [])
+        index = 0
+        while index < len(const_list) and const_list[index].error < constraint.error:
+            index += 1
+        if index >= len(const_list) or const_list[index] != constraint:
+            const_list.insert(index, constraint)
+        return const_list[0]
+
+    def _remove_single(self, constraints):
+        pair = constraint
+        if isinstance(constraint, Constrant):
+            pair = constraint.pair
+
+        const_list = self.constraints[pair]
+
+        index = 0
+        if isinstance(constraint, Constrant):
+            index = const_list.index(constraint)
+        const_list.pop(index)
+
+        if len(const_list) == 0:
+            del self.constraints[pair]
+
+    def _constraint_iter(self, constraints=None):
+        constraints = constraints or self.constraints
+        if isinstance(constraints, ConstraintSet):
+            constraints = constraints.constraints
+        if isinstance(constraints, dict):
+            for pair, constraint in constraints.items():
+                if type(constraint) == list:
+                    for const in constraint:
+                        yield const
+                else:
+                    yield constraint
+        else:
+            for constraint in constraints:
+                yield constraint
+
+
+
+class ImplicitConstraintDict(dict):
+    def __init__(self, composite, pairs_func):
+        self.composite = composite
+        self.pairs_func = pairs_func
+
+    def keys(self):
+        for pair in self.pairs_func():
+            yield pair
+
+    def values(self):
+        for pair in self.pairs_func():
+            yield self[pair]
+
+    def items(self):
+        for pair in self.pairs_func():
+            yield pair, self[pair]
+
+    def __getitem__(self, pair):
+        return [Constraint(self.composite, index1=pair[0], index2=pair[1])]
+
+
+
+"""
 
 
 class ConstraintSet:
@@ -325,6 +518,11 @@ class ConstraintSet:
             constraints[const.index1,const.index2] = const
 
         return solver.solve(constraints, poses)
+#"""
+
+
+
+
 
 """
 composite = constitch.CompositeImage()
@@ -345,5 +543,46 @@ constraints.solve(constitch.OutlierSolver())
 
 composite.apply(constraints.solve())
 composite.stitch()
+
+
+
+
+composite = constitch.CompositeImage()
+composite.add_images(images, poses)
+
+overlapping = composite.constraints(min_overlap=0.1)
+constraints = overlapping.calculate(constitch.FFTAligner())
+constraints = constraints.filter(min_score=0.5, min_overlap=0.1, max_length=max(images.shape))
+
+stage_model = constraints.fit_model()
+constraints = constraints.filter(stage_model.inliers)
+modeled = overlapping.calculate(stage_model)
+
+constraints = constraints.merge(modeled)
+composite.apply(constraints.solve())
+
+solver = constitch.LinearSolver()
+composite.apply(solver.solve(constraints, modeled, overlapping))
+
+composite.apply(constraints.solve(modeled, overlapping))
+constraints = overlapping.merge(modeled).merge(constraints)
+composite.apply(constraints.solve())
+
+constraints.remove(min_score=0.5, min_overlap=0.1)
+modeled_constraints = overlapping.calculate(constraints.fit_model(remove_outliers=True))
+
+constraints = composite.newconstraints(min_overlap=0.1).calculate(constitch.FFTAligner())
+constraints.remove(min_score=0.5, min_overlap=0.1)
+constraints.model(
+
+constraints.calculate(constitch.FFTAligner())
+constraints.filter(constraints.score < 0.5)
+constraints.solve(constitch.OutlierSolver())
+
+composite.apply(constraints.solve())
+composite.stitch()
+
+
+
 
 #"""
