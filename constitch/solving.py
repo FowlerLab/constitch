@@ -56,6 +56,9 @@ class LinearSolver:
 
         return solution_mat, solution_vals, initial_values
 
+    def make_positions(self, initial_poses, poses):
+        return dict(zip(sorted(list(initial_poses.keys())), poses))
+
     def solve(self, constraints, initial_poses):
         #image_indices = sorted(list(set(pair[0] for pair in constraints) | set(pair[1] for pair in constraints)))
         solution_mat, solution_vals, initial_values = self.make_constraint_matrix(constraints, initial_poses)
@@ -65,7 +68,7 @@ class LinearSolver:
         poses = np.round(solution.reshape(-1,2)).astype(int)
         poses -= poses.min(axis=0).reshape(1,2)
 
-        return dict(zip(list(initial_poses.keys()), poses))
+        return self.make_positions(initial_poses, poses)
 
     def solve_matrix(self, solution_mat, solution_vals, initial_values):
         #solution, residuals, rank, sing = np.linalg.lstsq(solution_mat, solution_vals, rcond=None)
@@ -74,7 +77,7 @@ class LinearSolver:
         return solution
 
     def score_func(self, constraint):
-        return max(0, constraint.score) + 0.1
+        return max(0, constraint.score)
 
 class OptimalSolver(LinearSolver):
     def __init__(self, **kwargs):

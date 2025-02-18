@@ -126,7 +126,7 @@ class FFTAligner(Aligner):
                 return
         else:
             score, dx, dy, overlap = find_peaks(fft, orig_image1, orig_image2, self.num_peaks)
-        constraint = Constraint(previous_constraint, dx=dx, dy=dy, score=score)
+        constraint = Constraint(previous_constraint, dx=dx, dy=dy, score=score, error=0)
 
         if self.downscale_factor:
             constraint.dx *= self.downscale_factor

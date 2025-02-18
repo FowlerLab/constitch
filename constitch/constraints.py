@@ -23,6 +23,10 @@ class OldConstraint:
 
 
 class Constraint:
+    """ class to represent the pixel offset between two images in a composite.
+
+    """
+
     def __init__(self, composite, index1=None, index2=None, dx=None, dy=None, score=None, error=None, type=ConstraintType.NORMAL):
         if isinstance(composite, Constraint):
             composite, index1, index2 = composite.composite, composite.index1, composite.index2
@@ -77,12 +81,32 @@ class Constraint:
     def image2(self):
         return self.composite.images[self.index2]
 
+    def section1(self, expand=0):
+        """ Returns the section of image1 that is overlapping with image2, given
+        the offset specified with dx and dy.
+        """
+        x1 = max(0, self.dx - expand)
+        x2 = min(self.box1.size[0] - self.dx, self.box2.size[0]) + expand
+        y1 = max(0, self.dy - expand)
+        y2 = min(self.box1.size[1] - self.dy, self.box2.size[1]) + expand
+        return self.image1[x1:x2,y1:y2]
+
+    def section2(self, expand=0):
+        """ Returns the section of image2 that is overlapping with image1, given
+        the offset specified with dx and dy.
+        """
+        x1 = max(0, -self.dx - expand)
+        x2 = min(self.box1.size[0], self.box2.size[0] + self.dx) + expand
+        y1 = max(0, -self.dy - expand)
+        y2 = min(self.box1.size[1], self.box2.size[1] + self.dy) + expand
+        return self.image1[x1:x2,y1:y2]
+
     @property
     def overlap_x(self):
         return min(self.box1.size[0] - self.dx, self.box2.size[0], self.box2.size[0] + self.dx, self.box1.size[0])
     @property
     def overlap_y(self):
-        return min(self.box1.size[1] - self.dy, self.box2.size[1], self.box2.size[1] + self.dx, self.box1.size[1])
+        return min(self.box1.size[1] - self.dy, self.box2.size[1], self.box2.size[1] + self.dy, self.box1.size[1])
     @property
     def overlap(self):
         overlaps = self.overlap_x, self.overlap_y
@@ -103,19 +127,35 @@ class Constraint:
     def length(self):
         return (self.dx ** 2 + self.dy ** 2) ** 0.5
 
+    def calculate(self, aligner=None, executor=None):
+        return self.calculate_future(aligner, executor).result()
 
-    def calculate(self, aligner=None):
+    def calculate_future(self, aligner=None, executor=None):
         aligner = aligner or self.composite.aligner
-        newconst = aligner.align(image1=self.image1, image2=self.image2, shape1=self.box1.size, shape2=self.box2.size, previous_constraint=self)
+        executor = executor or self.composite.executor
+        #newconst = aligner.align(image1=self.image1, image2=self.image2, shape1=self.box1.size, shape2=self.box2.size, previous_constraint=self)
+        future = executor.submit(align_job, aligner, image1=self.image1, image2=self.image2, shape1=self.box1.size, shape2=self.box2.size, previous_constraint=self)
         #self.composite.add_constraint(newconst)
+        return future
+
+    def expand_overlap(self, amount):
+        newconst = Constraint(self, dx=self.dx, dy=self.dy, score=self.score, error=self.error, type=self.type)
+
+        if type(amount) in (int, float):
+            amount = (amount, amount)
+
+        amount = min(amount[0], abs(self.dx)), min(amount[1], abs(self.dy))
+
+        if newconst.dx < 0: newconst.dx += amount[0]
+        else: newconst.dx -= amount[0]
+
+        if newconst.dy < 0: newconst.dy += amount[1]
+        else: newconst.dy -= amount[1]
+
         return newconst
 
-    def remove(self):
-        return self.composite.remove_constraint(self)
-
-    def add(self):
-        return self.composite.add_constraint(self)
-
+def align_job(aligner, **kwargs):
+    return aligner.align(**kwargs)
 
 class ConstraintFilter:
     def __init__(self, func=None, mins=None, maxes=None, equals=None):
@@ -207,10 +247,26 @@ class ConstraintFilter:
 
 #"""
 class ConstraintSet:
+    """ A class that stores a set of constraints, and can perform 
+    """
     def __init__(self, constraints=None):
         self.constraints = {}
         if constraints:
             self.add(constraints)
+
+    @property
+    def composite(self):
+        if len(self.constraints):
+            return next(iter(self.constraints.values()))[0].composite
+
+    def debug(self, *args, **kwargs):
+        if self.composite:
+            self.composite.debug(*args, **kwargs)
+
+    def progress(self, iter, **kwargs):
+        if self.composite:
+            return self.composite.progress(iter, **kwargs)
+        return iter
 
     def add(self, other):
         if isinstance(other, Constraint):
@@ -228,8 +284,9 @@ class ConstraintSet:
 
     def merge(self, other):
         new_set = ConstraintSet()
-        for const in self._constraint_iter(other):
-            self.add(other)
+        new_set.add(self)
+        new_set.add(other)
+        return new_set
 
     def filter(self, obj=None, **kwargs):
         if isinstance(obj, dict):
@@ -252,9 +309,27 @@ class ConstraintSet:
     def __getitem__(self, pair):
         return self.constraints[pair][0]
 
+    def __contains__(self, obj):
+        if isinstance(obj, Constraint):
+            return obj.pair in self.constraints and obj in self.constraints[obj.pair]
+        else:
+            return obj in self.constraints
 
-    def calculate(self, aligner=None):
-        newset = ConstraintSet(const.calculate(aligner=aligner) for const in self)
+    def keys(self):
+        return self.constraints.keys()
+
+    def values(self):
+        return (const_list[0] for const_list in self.constraints.values())
+
+    def items(self):
+        return ((pair, const_list[0]) for pair, const_list in self.constraints.items())
+
+
+    def calculate(self, aligner=None, executor=None):
+        futures = [const.calculate_future(aligner=aligner, executor=executor) for const in self]
+        newset = ConstraintSet(future.result() for future in self.progress(futures))
+        self.composite.debug("Calculated", len(futures), "new constraints")
+        #newset = ConstraintSet(const.calculate(aligner=aligner) for const in self)
         return newset
 
     def fit_model(self, model=None, outliers=False, random_state=12345):
@@ -284,21 +359,21 @@ class ConstraintSet:
         aligner = stage_model.StageModelAligner(model.estimator_ if outliers else model)
 
         if outliers:
-            print ('Filtered out', np.sum(~model.inlier_mask_), 'constraints as outliers')
+            self.debug ('Filtered out', np.sum(~model.inlier_mask_), 'constraints as outliers')
 
             if np.mean(model.inlier_mask_.astype(int)) < 0.8:
                 warnings.warn("Stage model filtered out over 20% of constraints as outilers."
                         " It may have hyperoptimized to the data, make sure all are actually outliers")
 
             est_poses, const_poses = est_poses[model.inlier_mask_], const_poses[model.inlier_mask_]
-            print ("Estimated stage model", model, "with an r2 score of", model.score(est_poses, const_poses),
+            self.debug ("Estimated stage model", model, "with an r2 score of", model.score(est_poses, const_poses),
                     ", classifying {}/{} constraints as outliers".format(np.sum(~model.inlier_mask_), len(self.constraints)))
 
             aligner.inliers = dict(zip(self.constraints.keys(), model.inlier_mask_))
             aligner.outlier = dict(zip(self.constraints.keys(), ~model.inlier_mask_))
 
         else:
-            print ("Estimated stage model", model, "with an r2 score of", model.score(est_poses, const_poses))
+            self.debug ("Estimated stage model", model, "with an r2 score of", model.score(est_poses, const_poses))
 
         if (aligner.model.predict([[0] * est_poses.shape[1]]).max() > const_poses.max() * 100 or 
                 aligner.model.predict([[1] * est_poses.shape[1]]).max() > const_poses.max() * 100):
@@ -308,7 +383,7 @@ class ConstraintSet:
         # calculate variance
         error = aligner.model.predict(est_poses) - const_poses
         error_thresh = np.percentile(np.abs(error), 99)
-        print ("Stage model error", np.percentile(np.abs(error), [0,5,50,75,95,100]), error_thresh)
+        self.debug ("Stage model error", np.percentile(np.abs(error), [0,5,50,75,95,100]), error_thresh)
         aligner.error = error_thresh
 
         return aligner
@@ -323,7 +398,10 @@ class ConstraintSet:
             poses[const.index2] = const.box2.pos1
             constraints[const.pair] = const
 
-        return solver.solve(constraints, poses)
+        print (poses)
+        newposes = solver.solve(constraints, poses)
+        print (newposes)
+        return newposes
 
 
     def _add_single(self, constraint):
@@ -547,8 +625,7 @@ composite.stitch()
 
 
 
-composite = constitch.CompositeImage()
-composite.add_images(images, poses)
+composite = constitch.CompositeImage(images, poses)
 
 overlapping = composite.constraints(min_overlap=0.1)
 constraints = overlapping.calculate(constitch.FFTAligner())
@@ -581,8 +658,5 @@ constraints.solve(constitch.OutlierSolver())
 
 composite.apply(constraints.solve())
 composite.stitch()
-
-
-
 
 #"""

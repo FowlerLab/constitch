@@ -308,7 +308,9 @@ class CompositeImage:
     and the fisseq.stitching.merging module.
     """
 
-    def __init__(self, aligner=None, precalculate=False, debug=True, progress=False, executor=None):
+    def __init__(self, images=None, positions=None, boxes=None, scale='pixel', channel_axis=None,
+            grid_size=None, tile_shape=None, overlap=0.1,
+            aligner=None, precalculate=False, debug=True, progress=False, executor=None):
         self.images = []
         self.greyimages = []
         self.boxes = BBoxList()
@@ -325,6 +327,11 @@ class CompositeImage:
         self.multichannel = False
 
         self.precalculate = precalculate
+
+        if images is not None:
+            if grid_size is not None or tile_shape is not None:
+                return self.add_split_image(images, grid_size=grid_size, tile_shape=tile_shape, overlap=overlap, channel_axis=channel_axis)
+            return self.add_images(images, positions, boxes=boxes, scale=scale, channel_axis=channel_axis)
 
     def pair_func(self):
         for i in range(len(self.images)):
@@ -504,7 +511,7 @@ class CompositeImage:
             boxes = box and [box],
             scale = scale, imagescale = imagescale)
 
-    def add_split_image(self, image, num_tiles=None, tile_shape=None, overlap=0.1, channel_axis=None):
+    def add_split_image(self, image, grid_size=None, tile_shape=None, overlap=0.1, channel_axis=None):
         """ Adds an image split into a number of tiles. This can be used to divide up
         a large image into smaller pieces for efficient processing. The resulting
         images are guaranteed to all be the same size.
@@ -517,11 +524,11 @@ class CompositeImage:
 
             image: ndarray
                 the image that will be split into tiles
-            num_tiles: int or (int, int)
+            grid_size: int or (int, int)
                 the number of tiles to split the image into. Either this or tile_shape
                 should be specified.
             tile_shape: (int, int)
-                The shape of the resulting tiles, if num_tiles isn't specified the maximum
+                The shape of the resulting tiles, if grid_size isn't specified the maximum
                 number of tiles that fit in the image are extracted. Whether specified or not,
                 the size of all tiles created is guaranteed to be uniform.
             overlap: float, int or (float or int, float or int)
@@ -531,47 +538,47 @@ class CompositeImage:
                 as it is not always possible to get the exact overlap requested due to rounding issues,
                 and in some cases more overlap will exist between some tiles
         """
-        assert num_tiles or tile_shape, "Must specify either num_tiles or tile_shape"
+        assert grid_size or tile_shape, "Must specify either grid_size or tile_shape"
 
         if channel_axis is not None:
             axes = list(range(3))
             axes.pop(channel_axis)
             image = image.transpose(*axes, channel_axis)
 
-        if type(num_tiles) == int:
-            num_tiles = (num_tiles, num_tiles)
+        if type(grid_size) == int:
+            grid_size = (grid_size, grid_size)
         if type(overlap) in (int, float):
             overlap = (overlap, overlap)
         
-        if num_tiles:
+        if grid_size:
             if type(overlap[0]) == float:
                 tile_offset = (
-                    #int(image.shape[0] // (num_tiles[0] + overlap[0])),
-                    #int(image.shape[1] // (num_tiles[1] + overlap[1])),
-                    image.shape[0] / (num_tiles[0] + overlap[0]),
-                    image.shape[1] / (num_tiles[1] + overlap[1]),
+                    #int(image.shape[0] // (grid_size[0] + overlap[0])),
+                    #int(image.shape[1] // (grid_size[1] + overlap[1])),
+                    image.shape[0] / (grid_size[0] + overlap[0]),
+                    image.shape[1] / (grid_size[1] + overlap[1]),
                 )
                 overlap = tile_offset[0] * overlap[0], tile_offset[1] * overlap[1]
             else:
                 tile_offset = (
-                    #int((image.shape[0] - overlap[0]) // num_tiles[0]),
-                    #int((image.shape[1] - overlap[1]) // num_tiles[1]),
-                    (image.shape[0] - overlap[0]) / num_tiles[0],
-                    (image.shape[1] - overlap[1]) / num_tiles[1],
+                    #int((image.shape[0] - overlap[0]) // grid_size[0]),
+                    #int((image.shape[1] - overlap[1]) // grid_size[1]),
+                    (image.shape[0] - overlap[0]) / grid_size[0],
+                    (image.shape[1] - overlap[1]) / grid_size[1],
                 )
             tile_shape = math.ceil(tile_offset[0] + overlap[0]), math.ceil(tile_offset[1] + overlap[1])
         else:
             if type(overlap[0]) == float:
                 overlap = tile_shape[0] * overlap[0], tile_shape[1] * overlap[1]
             tile_offset = tile_shape[0] - overlap[0], tile_shape[1] - overlap[1]
-            num_tiles = math.ceil((image.shape[0] - overlap[0]) / tile_offset[0]), math.ceil((image.shape[1] - overlap[1]) / tile_offset[1])
+            grid_size = math.ceil((image.shape[0] - overlap[0]) / tile_offset[0]), math.ceil((image.shape[1] - overlap[1]) / tile_offset[1])
 
         images = []
         positions = []
-        for xpos in np.linspace(0, image.shape[0] - tile_shape[0], num_tiles[0]):
-            for ypos in np.linspace(0, image.shape[1] - tile_shape[1], num_tiles[1]):
-        #for xpos in range(0, tile_offset[0] * num_tiles[0], tile_offset[0]):
-            #for ypos in range(0, tile_offset[1] * num_tiles[1], tile_offset[1]):
+        for xpos in np.linspace(0, image.shape[0] - tile_shape[0], grid_size[0]):
+            for ypos in np.linspace(0, image.shape[1] - tile_shape[1], grid_size[1]):
+        #for xpos in range(0, tile_offset[0] * grid_size[0], tile_offset[0]):
+            #for ypos in range(0, tile_offset[1] * grid_size[1], tile_offset[1]):
                 xpos, ypos = round(xpos), round(ypos)
                 images.append(image[xpos:xpos+tile_shape[0],ypos:ypos+tile_shape[1]])
                 positions.append((xpos, ypos))
@@ -1683,7 +1690,7 @@ class CompositeImage:
         return poses
 
 
-    def stitch_images(self, indices=None, real_images=None, out=None, bg_value=None, return_bg_mask=False,
+    def stitch(self, indices=None, real_images=None, out=None, bg_value=None, return_bg_mask=False,
             mins=None, maxes=None, keep_zero=False, merger=None):
         """ Combines images in the composite into a single image
             
@@ -1785,12 +1792,14 @@ class CompositeImage:
         return full_image
 
 
-    def plot_scores(self, path, score_func=None):
+    def plot_scores(self, path, constraints=None, score_func=None):
         import matplotlib.pyplot as plt
         import matplotlib.patches
 
+        constraints = constraints or {}
+
         groups = [list(range(len(self.boxes)))]
-        const_groups = [self.constraints.keys()]
+        const_groups = [constraints.keys()]
         names = ['']
         if score_func == 'accuracy':
             score_func = self.constraint_error
@@ -1804,11 +1813,11 @@ class CompositeImage:
             print (vals)
             for val in vals:
                 groups.append([i for i in range(len(self.boxes)) if self.boxes[i].pos1[2] == val])
-                const_groups.append([(i,j) for (i,j) in self.constraints if self.boxes[i].pos1[2] == val and self.boxes[j].pos1[2] == val])
+                const_groups.append([(i,j) for (i,j) in constraints if self.boxes[i].pos1[2] == val and self.boxes[j].pos1[2] == val])
                 names.append('(plane z={})'.format(val))
 
             new_const_groups = {}
-            for i,j in self.constraints:
+            for i,j in constraints:
                 pair = (self.boxes[i].pos1[2], self.boxes[j].pos1[2])
                 if pair[0] == pair[1]: continue
                 new_const_groups[pair] = new_const_groups.get(pair, [])
@@ -1834,10 +1843,10 @@ class CompositeImage:
             poses = []
             colors = []
             sizes = []
-            #for (i,j), constraint in self.constraints.items():
+            #for (i,j), constraint in constraints.items():
                 #if i not in indices or j not in indices: continue
             for i,j in const_pairs:
-                constraint = self.constraints[(i,j)]
+                constraint = constraints[(i,j)]
 
                 pos1, pos2 = self.boxes[i].center[:2], self.boxes[j].center[:2]
                 #if np.all(pos1 == pos2):

@@ -8,6 +8,7 @@ import sklearn.mixture
 import sklearn.base
 
 from . import alignment
+from .constraints import Constraint
 
 class ConversionStageModel(sklearn.base.BaseEstimator):
     def __init__(self, model=None):
@@ -76,9 +77,12 @@ class StageModelAligner(alignment.Aligner):
     def __init__(self, model, error=15):
         self.model = model
         self.error = error
+        self.score = 0.00001
 
-    def align(self, image1, image2, shape1=None, shape2=None, precalc1=None, precalc2=None, constraint=None):
+    def align(self, image1, image2, shape1=None, shape2=None, precalc1=None, precalc2=None, previous_constraint=None):
+        constraint = previous_constraint
         X = np.array([*constraint.box1.pos1, *constraint.box2.pos1]).reshape(1,-1)
         y = self.model.predict(X).reshape(-1)
-        newconst = Constraint(constraint, dx=y[0], dy=y[1], score=None, error=self.error)
+        newconst = Constraint(constraint, dx=y[0], dy=y[1], score=self.score, error=self.error)
+        return newconst
 
