@@ -81,25 +81,47 @@ class Constraint:
     def image2(self):
         return self.composite.images[self.index2]
 
-    def section1(self, expand=0):
-        """ Returns the section of image1 that is overlapping with image2, given
-        the offset specified with dx and dy.
+    @property
+    def section1(self):
+        """ Returns the section of image1 relevant for alignment, that is the
+        section of image1 that overlaps with image2, expanded to include self.error.
+        If error is infinite or None this will be the same as self.image1.
         """
-        x1 = max(0, self.dx - expand)
-        x2 = min(self.box1.size[0] - self.dx, self.box2.size[0]) + expand
-        y1 = max(0, self.dy - expand)
-        y2 = min(self.box1.size[1] - self.dy, self.box2.size[1]) + expand
+        x1, x2, y1, y2 = self.section1_bounds
         return self.image1[x1:x2,y1:y2]
 
-    def section2(self, expand=0):
-        """ Returns the section of image2 that is overlapping with image1, given
-        the offset specified with dx and dy.
+    @property
+    def section2(self):
+        """ Returns the section of image2 relevant for alignment, that is the
+        section of image2 that overlaps with image1, expanded to include self.error.
+        If error is infinite or None this will be the same as self.image1.
         """
+        x1, x2, y1, y2 = self.section2_bounds
+        return self.image2[x1:x2,y1:y2]
+
+    @property
+    def section1_bounds(self):
+        if self.error is None or self.error == math.inf: return 0, self.box1.size[0], 0, self.box1.size[1]
+        expand = self.error
+
+        x1 = max(0, self.dx - expand)
+        x2 = min(self.box1.size[0], self.box2.size[0] + self.dx + expand)
+        y1 = max(0, self.dy - expand)
+        y2 = min(self.box1.size[1], self.box2.size[1] + self.dy + expand)
+
+        return x1, x2, y1, y2
+
+    @property
+    def section2_bounds(self):
+        if self.error is None or self.error == math.inf: return 0, self.box2.size[0], 0, self.box2.size[1]
+        expand = self.error
+
         x1 = max(0, -self.dx - expand)
-        x2 = min(self.box1.size[0], self.box2.size[0] + self.dx) + expand
+        x2 = min(self.box2.size[0], self.box1.size[0] - self.dx + expand)
         y1 = max(0, -self.dy - expand)
-        y2 = min(self.box1.size[1], self.box2.size[1] + self.dy) + expand
-        return self.image1[x1:x2,y1:y2]
+        y2 = min(self.box2.size[1], self.box1.size[1] - self.dy + expand)
+
+        return x1, x2, y1, y2
 
     @property
     def overlap_x(self):
@@ -134,7 +156,8 @@ class Constraint:
         aligner = aligner or self.composite.aligner
         executor = executor or self.composite.executor
         #newconst = aligner.align(image1=self.image1, image2=self.image2, shape1=self.box1.size, shape2=self.box2.size, previous_constraint=self)
-        future = executor.submit(align_job, aligner, image1=self.image1, image2=self.image2, shape1=self.box1.size, shape2=self.box2.size, previous_constraint=self)
+        future = executor.submit(align_job, aligner, constraint=self)
+        #future = executor.submit(align_job, aligner, image1=self.image1, image2=self.image2, shape1=self.box1.size, shape2=self.box2.size, previous_constraint=self)
         #self.composite.add_constraint(newconst)
         return future
 
@@ -153,6 +176,13 @@ class Constraint:
         else: newconst.dy -= amount[1]
 
         return newconst
+
+    def new(self, dx=None, dy=None, section_dx=None, section_dy=None, score=None, error=None, type=None):
+        if section_dx is not None:
+            dx = self.section1_bounds[0] - self.section2_bounds[0] + section_dx
+            dy = self.section1_bounds[2] - self.section2_bounds[2] + section_dy
+
+        return Constraint(self, dx=dx, dy=dy, score=score, error=error, type=type)
 
 def align_job(aligner, **kwargs):
     return aligner.align(**kwargs)
@@ -383,7 +413,7 @@ class ConstraintSet:
         # calculate variance
         error = aligner.model.predict(est_poses) - const_poses
         error_thresh = np.percentile(np.abs(error), 99)
-        self.debug ("Stage model error", np.percentile(np.abs(error), [0,5,50,75,95,100]), error_thresh)
+        self.debug ("Stage model error", np.percentile(np.abs(error), [0,5,50,75,95,100]).tolist(), error_thresh)
         aligner.error = error_thresh
 
         return aligner
@@ -398,9 +428,7 @@ class ConstraintSet:
             poses[const.index2] = const.box2.pos1
             constraints[const.pair] = const
 
-        print (poses)
         newposes = solver.solve(constraints, poses)
-        print (newposes)
         return newposes
 
 

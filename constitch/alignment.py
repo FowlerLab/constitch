@@ -15,7 +15,7 @@ import numba
 class Aligner:
     """ Abstract class that defines an algorithm for aligning two images onto each other.
     """
-    def precalculate(self, image, shape1=None):
+    def precalculate(self, image, box):
         """ Performs an arbitrary precalculation step specific to the alignment algorithm.
         This would be a step in the algorithm that only has to be run once per image,
         and can be cached for each calculation done with the same image. The result of
@@ -23,7 +23,7 @@ class Aligner:
         """
         pass
 
-    def align(self, image1, image2, shape1=None, shape2=None, precalc1=None, precalc2=None, constraint=None):
+    def align(self, constraint, precalc1=None, precalc2=None):
         """ Performs the alignment of two images, finding the pixel offset that best aligns the
         two images. The offset should be from image1 to image2. The return value should be a Constraint
         object, with at least the dx, dy fields filled in to represent the offset of image2 needed
@@ -35,9 +35,9 @@ class Aligner:
         pass
 
     # Helper functions for subclasses:
-    def resize_if_needed(self, image, shape=None, downscale_factor=None, padding=None):
-        if shape is not None and image.shape != tuple(shape):
-            image = skimage.transform.resize(image, shape)
+    def resize_if_needed(self, image, box=None, downscale_factor=None, padding=None):
+        if box is not None and image.shape != tuple(box.size):
+            image = skimage.transform.resize(image, box.size)
         if downscale_factor is not None and downscale_factor != 1:
             image = skimage.transform.downscale_local_mean(image, downscale_factor)
         if padding is not None:
@@ -46,11 +46,11 @@ class Aligner:
             image = newimage
         return image
     
-    def precalculate_if_needed(self, image1, image2, shape1=None, shape2=None, precalc1=None, precalc2=None):
+    def precalculate_if_needed(self, constraint, precalc1, precalc2):
         if precalc1 is None:
-            precalc1 = self.precalculate(image1, shape1)
+            precalc1 = self.precalculate(constraint.image1, constraint.box1.size)
         if precalc2 is None:
-            precalc2 = self.precalculate(image2, shape2)
+            precalc2 = self.precalculate(constraint.image2, constraint.box2.size)
         return precalc1, precalc2
 
 
@@ -80,20 +80,42 @@ class FFTAligner(Aligner):
         self.precalculate_fft = precalculate_fft
         self.downscale_factor = downscale_factor
 
-    def precalculate(self, image, shape=None):
+    def precalculate(self, image, box=None):
         if len(image.shape) == 3: image = image[:,:,0]
-        image = self.resize_if_needed(image, shape, downscale_factor=self.downscale_factor)
+        image = self.resize_if_needed(image, box, downscale_factor=self.downscale_factor)
         fft = None if not self.precalculate_fft else np.fft.fft2(image, axes=(0,1))
         return image, fft
 
-    def align(self, image1, image2, shape1=None, shape2=None, precalc1=None, precalc2=None, previous_constraint=None):
+    def align(self, constraint, precalc1=None, precalc2=None):
+        section1, section2 = constraint.section1, constraint.section2
+
+        orig_section1, orig_section2 = section1, section2
+        if section1.shape != section2.shape:
+            section1, section2 = image_diff_sizes(section1, section2)
+
+        fft1 = np.fft.fft2(section1, axes=(0,1))
+        fft2 = np.fft.fft2(section2, axes=(0,1))
+
+        fft = calc_pcm(fft1.reshape(-1), fft2.reshape(-1)).reshape(fft1.shape)
+        fft = np.fft.ifft2(fft, axes=(0,1)).real
+        if len(fft.shape) == 3:
+            fft = fft.sum(axis=2)
+
+        score, dx, dy, overlap = find_peaks(fft, orig_section1, orig_section2, self.num_peaks)
+
+        newconst = constraint.new(section_dx=dx, section_dy=dy, score=score, error=0)
+        return newconst
+
+    def align_full(self, constraint, precalc1=None, precalc2=None):
+        image1, image2 = constraint.image1, constraint.image2
+
         if precalc1 is None:
-            image1 = self.resize_if_needed(image1, shape1, downscale_factor=self.downscale_factor)
+            image1 = self.resize_if_needed(image1, constraint.box1, downscale_factor=self.downscale_factor)
         else:
             image1 = precalc1[0]
 
         if precalc2 is None:
-            image2 = self.resize_if_needed(image2, shape2, downscale_factor=self.downscale_factor)
+            image2 = self.resize_if_needed(image2, constraint.box2, downscale_factor=self.downscale_factor)
         else:
             image2 = precalc2[0]
 
@@ -118,33 +140,35 @@ class FFTAligner(Aligner):
             fft = fft.sum(axis=2)
             #np.sum(fft, axis=2, 
 
-        if previous_constraint is not None and previous_constraint.error is not None:
+        if constraint is not None and constraint.error is not None:
             score, dx, dy, overlap = find_peaks_estimate(fft, orig_image1, orig_image2, self.num_peaks,
-                    estimate=(previous_constraint.dx, previous_constraint.dy), search_range=previous_constraint.error)
+                    estimate=(constraint.dx, constraint.dy), search_range=constraint.error)
             if score == -math.inf:
                 #print (dx, dy, previous_constraint.dx, previous_constraint.dy, previous_constraint.error, score)
                 return
         else:
             score, dx, dy, overlap = find_peaks(fft, orig_image1, orig_image2, self.num_peaks)
-        constraint = Constraint(previous_constraint, dx=dx, dy=dy, score=score, error=0)
+
+        newconst = Constraint(constraint, dx=dx, dy=dy, score=score, error=0)
 
         if self.downscale_factor:
-            constraint.dx *= self.downscale_factor
-            constraint.dy *= self.downscale_factor
-            constraint.error = self.downscale_factor
+            newconst.dx *= self.downscale_factor
+            newconst.dy *= self.downscale_factor
+            newconst.error = self.downscale_factor
 
-        return constraint
+        return newconst
 
 
 class PaddedFFTAligner(FFTAligner):
 
-    def precalculate(self, image, shape=None):
+    def precalculate(self, image, box=None):
         if len(image.shape) == 3: image = image[:,:,0]
-        image = self.resize_if_needed(image, shape, downscale_factor=self.downscale_factor, padding=shape)
+        image = self.resize_if_needed(image, box, downscale_factor=self.downscale_factor, padding=box.size)
         fft = None if not self.precalculate_fft else np.fft.fft2(image, axes=(0,1))
         return image, fft
 
-    def align(self, image1, image2, shape1=None, shape2=None, precalc1=None, precalc2=None, previous_constraint=None):
+    def align(self, constraint, precalc1=None, precalc2=None):
+        image1, image2 = constraint.image1, constraint.image2
         orig_orig_image1, orig_orig_image2 = image1, image2
 
         if precalc1 is None:
@@ -180,7 +204,7 @@ class PaddedFFTAligner(FFTAligner):
 
         dx, dy = np.unravel_index(np.argmax(fft), fft.shape)
         score = fft[dx,dy]
-        dx, dy = dx % shape1[0], dy % shape1[1]
+        dx, dy = dx % constraint.box1.size[0], dy % constraint.box1.size[1]
         return Constraint(previous_constraint, dx=dx, dy=dy, score=score, error=0)
 
 
@@ -189,7 +213,7 @@ class FeatureAligner(Aligner):
     def __init__(self, num_features=2000):
         self.num_features = num_features
 
-    def precalculate(self, image, shape=None):
+    def precalculate(self, image, box=None):
         image = (image / np.percentile(image, 99.9) * 255).astype(np.uint8)
         detector = cv.SIFT_create(nfeatures=self.num_features)
         
@@ -201,8 +225,8 @@ class FeatureAligner(Aligner):
 
         return keypoints, features
 
-    def align(self, image1, image2, shape1=None, shape2=None, precalc1=None, precalc2=None):
-        (keypoints1, features1), (keypoints2, features2) = self.precalculate_if_needed(image1, image2, shape1, shape2, precalc1, precalc2)
+    def align(self, constraint, precalc1=None, precalc2=None):
+        (keypoints1, features1), (keypoints2, features2) = self.precalculate_if_needed(constraint, precalc1, precalc2)
 
         FLANN_INDEX_KDTREE = 1
         index_params = dict(algorithm = FLANN_INDEX_KDTREE, trees = 5)

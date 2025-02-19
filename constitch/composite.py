@@ -117,6 +117,20 @@ class SequentialExecutor(concurrent.futures.Executor):
 
 
 
+
+class CompositeConstraintSet(ConstraintSet):
+    def __init__(self, composite, pair_func):
+        super().__init__()
+        self.constraints = ImplicitConstraintDict(composite, pair_func)
+
+    def add(self, obj):
+        raise "Cannot add constraints to composite, composite.constraints is read-only"
+
+    def __call__(self, *args, **kwargs):
+        return self.filter(*args, **kwargs)
+
+
+
 class CompositeImage:
     """
     This class encapsulates the whole stitching process, the smallest example of stitching is
@@ -316,8 +330,7 @@ class CompositeImage:
         self.boxes = BBoxList()
         #self.constraints = {}
         #self._constraints = collections.defaultdict(list)
-        self.constraints = ConstraintSet()
-        self.constraints.constraints = ImplicitConstraintDict(self, self.pair_func)
+        self.constraints = CompositeConstraintSet(self, self.pair_func)
         self.constraints_update_count = 1
         self.scale = 1
         self.stage_model = None
