@@ -1,7 +1,10 @@
 import numpy as np
+import io
+import pickle
 import time
 import sys
 import math
+
 
 def memory_report():
     import psutil
@@ -166,3 +169,39 @@ def to_rgb8(image):
     image = image.transpose((1,2,0))
     return image[:,:,:3]
 """
+
+
+def save(path, composite, *constraint_sets, save_images=True):
+    const_objs = []
+    for constraint_set in constraint_sets:
+        const_objs.append([const.to_obj() for const in constraint_set._constraint_iter()])
+
+    obj = dict(
+        composite = composite.to_obj(save_images=save_images),
+        constraint_sets = const_objs,
+    )
+
+    if isinstance(path, io.IOBase):
+        pickle.dump(obj, path)
+    else:
+        with open(path, 'wb') as ofile:
+            pickle.dump(obj, ofile)
+
+def load(path, **kwargs):
+    from .composite import CompositeImage
+    from .constraints import Constraint, ConstraintSet
+    if isinstance(path, io.IOBase):
+        obj = pickle.load(path)
+    else:
+        obj = pickle.load(open(path, 'rb'))
+
+    composite = CompositeImage.from_obj(obj['composite'], **kwargs)
+    constraint_sets = []
+    for const_set_obj in obj['constraint_sets']:
+        constraint_sets.append(ConstraintSet(Constraint(composite, **const_obj) for const_obj in const_set_obj))
+
+    if len(constraint_sets) == 0:
+        return composite
+    else:
+        return [composite] + constraint_sets
+

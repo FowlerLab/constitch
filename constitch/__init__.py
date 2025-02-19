@@ -45,6 +45,7 @@ from .stitching import stitch_cycles, make_test_image
 from .evaluation import evaluate_stitching, evaluate_grid_stitching
 from .merging import Merger, MeanMerger, EfficientMeanMerger, NearestMerger, MaskMerger, LastMerger, EfficientNearestMerger
 from .solving import LinearSolver, OptimalSolver, OutlierSolver
+from .utils import save, load
 
 
 __all__ = [
@@ -74,4 +75,7 @@ __all__ = [
     "LinearSolver",
     "OptimalSolver",
     "OutlierSolver",
+
+    "save",
+    "load",
 ]

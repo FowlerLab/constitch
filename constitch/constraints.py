@@ -1,5 +1,6 @@
 from typing import Optional
 import dataclasses
+import itertools
 import enum
 import math
 import warnings
@@ -47,6 +48,15 @@ class Constraint:
         self.score = score
         self.error = error
         self.type = type
+
+    def to_obj(self):
+        return dict(
+            index1=self.index1, index2=self.index2,
+            dx=self.dx, dy=self.dy,
+            score=self.score,
+            error=self.error,
+            type=self.type,
+        )
 
     def __str__(self):
         params = dict(dx=self.dx, dy=self.dy, score=self.score, error=self.error)
@@ -318,7 +328,10 @@ class ConstraintSet:
         new_set.add(other)
         return new_set
 
-    def filter(self, obj=None, **kwargs):
+    def find(self, obj=None, **kwargs):
+        return next(iter(self.filter(obj, limit=1, **kwargs)))
+
+    def filter(self, obj=None, limit=None, **kwargs):
         if isinstance(obj, dict):
             newset = ConstraintSet()
             for pair, val in obj.items():
@@ -330,7 +343,11 @@ class ConstraintSet:
             obj = kwargs
 
         filters = ConstraintFilter.asfilter(obj)
-        newset = ConstraintSet(filter(filters, self._constraint_iter()))
+        if limit is None:
+            newset = ConstraintSet(filter(filters, self._constraint_iter()))
+        else:
+            newset = ConstraintSet(filter(filters, itertools.islice(self._constraint_iter(), limit)))
+
         return newset
 
     def __iter__(self):
@@ -353,6 +370,14 @@ class ConstraintSet:
 
     def items(self):
         return ((pair, const_list[0]) for pair, const_list in self.constraints.items())
+
+
+    ATTRS = ['dx', 'dy', 'score', 'error', 'overlap', 'overlap_x', 'overlap_y', 'overlap_ratio', 'overlap_ratio_x', 'overlap_ratio_y', 'size']
+    def __getattr__(self, name):
+        if name not in self.ATTRS:
+            return getattr(super(), name)
+        runfilters()
+        return np.array([getattr(const, name) for const in self.constraints])
 
 
     def calculate(self, aligner=None, executor=None):
@@ -492,141 +517,6 @@ class ImplicitConstraintDict(dict):
 
     def __getitem__(self, pair):
         return [Constraint(self.composite, index1=pair[0], index2=pair[1])]
-
-
-
-"""
-
-
-class ConstraintSet:
-    def __init__(self, composite, constraints=None, filters=None, ran_filters=None, last_update=0, never_update=False, pairs=None):
-        self.composite = composite
-        self.constraints = constraints
-        self.filters = filters or ConstraintFilter()
-        self.ran_filters = ran_filters or ConstraintFilter()
-        self.last_update = None if never_update else last_update
-        self.pairs = None
-
-    def __str__(self):
-        parts = []
-        if self.constraints is not None and self.constraints_updated():
-            parts.append('{} constraints'.format(len(self.constraints)))
-        if not self.ran_filters.alwaystrue():
-            parts.append(str(self.ran_filters)[17:-1]) # remove ConstraintFilter(...)
-        if not self.filters.alwaystrue():
-            parts.append(str(self.filters)[17:-1]) # remove ConstraintFilter(...)
-        return 'ConstraintSet({})'.format(', '.join(parts))
-
-    def constraints_updated(self):
-        return self.last_update is None or self.composite.constraints_update_count == self.last_update
-
-    def __and__(self, other):
-        if isinstance(other, ConstraintSet):
-            assert self.composite is other.composite, 'Cannot merge ConstraintSets that are from different composites'
-            return ConstraintSet(self.composite,
-                    constraints = list(set(self.constraints) & set(self.constraints)),
-                    filters = self.filters & other.filters,
-                    ran_filters = self.ran_filters & other.ran_filters,
-                    last_update = min(self.last_update, other.last_update))
-
-        elif isinstance(other, ConstraintFilter):
-            return ConstraintSet(self.composite,
-                    constraints = self.constraints,
-                    filters = self.filters & other,
-                    ran_filters = self.ran_filters,
-                    last_update = self.last_update)
-
-    def __or__(self, other):
-        if isinstance(other, ConstraintSet):
-            assert self.composite is other.composite, 'Cannot merge ConstraintSets that are from different composites'
-            return ConstraintSet(self.composite,
-                    constraints = list(set(self.constraints) | set(self.constraints)),
-                    filters=self.filters | other.filters,
-                    ran_filter = self.ran_filters | other.ran_filters,
-                    last_update = min(self.last_update, other.last_update))
-
-        elif isinstance(other, ConstraintFilter):
-            return ConstraintSet(self.composite,
-                    constraints = self.constraints,
-                    filters = self.filters | other,
-                    ran_filters = self.ran_filters,
-                    last_update = self.last_update,
-            )
-
-    def filter(self, obj=None, **kwargs):
-        if obj is None:
-            obj = kwargs
-
-        if isinstance(obj, np.ndarray) and obj.dtype == bool:
-            self.runfilters()
-            constraints = [const for const, valid in zip(self.constraints, obj) if valid]
-            return ConstraintSet(self.composite, constraints=constraints)
-
-        filters = ConstraintFilter.asfilter(obj)
-        return self & filters
-
-    def merge(self, obj=None, **kwargs):
-        if obj is None:
-            obj = kwargs
-        filters = ConstraintFilter.asfilter(obj)
-        return self | filters
-
-    def runfilters(self):
-        #if self.filters.alwaystrue() and (self.ran_filters.alwaystrue() or self.composite.constraints_update_count == self.last_update):
-            #return
-        if self.filters.alwaystrue() and self.constraints_updated():
-            return
-
-        newconstraints = []
-        if self.constraints is not None and self.constraints_updated():
-            newconstraints.extend(filter(self.filters, self.constraints))
-        else:
-            if 'type' in self.filters.equals:
-                iterable = self.composite.constraintiter(type=self.filters.equals['type'], pairs=self.pairs)
-            else:
-                iterable = self.composite.constraintiter(pairs=self.pairs)
-            newconstraints.extend(filter(self.ran_filters & self.filters, iterable))
-
-        self.last_update = self.composite.constraints_update_count
-        self.constraints = newconstraints
-        self.ran_filters = self.ran_filters & self.filters
-        self.filters = ConstraintFilter()
-
-    def __iter__(self):
-        self.runfilters()
-        return iter(self.constraints)
-
-    ATTRS = ['dx', 'dy', 'score', 'error', 'overlap', 'overlap_x', 'overlap_y', 'overlap_ratio', 'overlap_ratio_x', 'overlap_ratio_y', 'size']
-    def __getattr__(self, name):
-        if name not in self.ATTRS:
-            return getattr(super(), name)
-        runfilters()
-        return np.array([getattr(const, name) for const in self.constraints])
-
-    def calculate(self, aligner=None):
-        self.runfilters()
-        newconsts = [const.calculate(aligner=aligner) for const in self.constraints]
-        return ConstraintSet(self.composite, constraints=newconsts, never_update=True)
-
-    def remove(self):
-        self.runfilters()
-        newconsts = [const.remove() for const in self.constraints]
-        return ConstraintSet(self.composite, constraints=newconsts, never_update=True)
-
-    def solve(self, solver=None):
-        self.runfilters()
-        solver = solver or composite.solver
-        constraints = {}
-        poses = {}
-        for const in self.constraints:
-            poses[const.index1] = const.box1.pos1
-            poses[const.index2] = const.box2.pos1
-            constraints[const.index1,const.index2] = const
-
-        return solver.solve(constraints, poses)
-#"""
-
-
 
 
 
