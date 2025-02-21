@@ -119,7 +119,7 @@ class OptimalSolver(LinearSolver):
 
         return values
 
-class MaxOutlierSolver:
+class OutlierSolver:
     def __init__(self, solver=None, outlier_threshold=1.5):
         self.solver = solver or LinearSolver()
         self.outlier_threshold = outlier_threshold
@@ -137,6 +137,9 @@ class MaxOutlierSolver:
             diffs = np.array(diffs)
             diffs = np.linalg.norm(diffs, axis=1)
 
+            print ("Solved", len(constraints), "constraints, with error: min {} max".format(
+                    np.percentile(diffs, (0,1,5,50,95,99,100)).astype(int)))
+
             max_diffs = {}
             for pair, diff in zip(constraints.keys(), diffs):
                 max_diffs[pair[0]] = max(max_diffs.get(pair[0], 0), diff)
@@ -150,13 +153,13 @@ class MaxOutlierSolver:
                     del constraints[pair]
 
             print ('now', len(constraints), 'constraints')
-            break
 
-        return poses, constraints
+        return poses
+        #return poses, constraints
 
 
 
-class OutlierSolver:
+class NeighborOutlierSolver:
     def __init__(self, solver=None, testing_radius=3):
         self.solver = solver or LinearSolver()
         self.outlier_threshold = 5

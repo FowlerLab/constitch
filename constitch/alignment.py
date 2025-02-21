@@ -87,6 +87,7 @@ class FFTAligner(Aligner):
         return image, fft
 
     def align(self, constraint, precalc1=None, precalc2=None):
+        return self.align_full(constraint, precalc1, precalc2)
         section1, section2 = constraint.section1, constraint.section2
 
         orig_section1, orig_section2 = section1, section2
@@ -563,7 +564,8 @@ def find_peaks_estimate(fft, image1, image2, num_peaks, estimate, search_range):
 
 
 def image_diff_sizes(image1, image2):
-    new_shape = max(image1.shape[0], image2.shape[0]), max(image1.shape[1], image2.shape[1])
+    #new_shape = (max(image1.shape[0], image2.shape[0]), max(image1.shape[1], image2.shape[1]))
+    new_shape = tuple(np.maximum(image1.shape, image2.shape))
 
     if image1.shape != new_shape:
         newimg = np.zeros(new_shape, dtype=image1.dtype)

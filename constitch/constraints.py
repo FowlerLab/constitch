@@ -156,8 +156,16 @@ class Constraint:
         return self.overlap / min(self.box1.size.prod(), self.box2.size.prod())
 
     @property
+    def touching(self):
+        return self.overlap >= 0 and (self.overlap_x > 0 or self.overlap_y > 0)
+
+    @property
     def length(self):
         return (self.dx ** 2 + self.dy ** 2) ** 0.5
+
+    @property
+    def difference(self):
+        return (self.dx, self.dy) - (self.box2.pos1[:2] - self.box1.pos1[:2])
 
     def calculate(self, aligner=None, executor=None):
         return self.calculate_future(aligner, executor).result()
@@ -353,6 +361,9 @@ class ConstraintSet:
     def __iter__(self):
         return iter(const_list[0] for const_list in self.constraints.values())
 
+    def __len__(self):
+        return len(self.constraints)
+
     def __getitem__(self, pair):
         return self.constraints[pair][0]
 
@@ -383,7 +394,7 @@ class ConstraintSet:
     def calculate(self, aligner=None, executor=None):
         futures = [const.calculate_future(aligner=aligner, executor=executor) for const in self]
         newset = ConstraintSet(future.result() for future in self.progress(futures))
-        self.composite.debug("Calculated", len(futures), "new constraints")
+        self.debug("Calculated", len(futures), "new constraints")
         #newset = ConstraintSet(const.calculate(aligner=aligner) for const in self)
         return newset
 
@@ -458,6 +469,8 @@ class ConstraintSet:
 
 
     def _add_single(self, constraint):
+        assert len(self) == 0 or constraint.composite is self.composite, "Adding constraints from different composite"
+
         const_list = self.constraints.setdefault(constraint.pair, [])
         index = 0
         while index < len(const_list) and const_list[index].error < constraint.error:

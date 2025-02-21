@@ -38,7 +38,7 @@ documentation of the CompositeImage.
 """
 
 from .composite import CompositeImage, BBox, BBoxList
-from .constraints import Constraint
+from .constraints import Constraint, ConstraintSet, ConstraintFilter
 from .alignment import calculate_offset, ncc, score_offset, Aligner, FFTAligner, FeatureAligner
 #from .stage_model import StageModel
 from .stitching import stitch_cycles, make_test_image
@@ -60,6 +60,8 @@ __all__ = [
     "BBox",
     "BBoxList",
     "Constraint",
+    "ConstraintSet",
+    "ConstraintFilter",
     "Aligner",
     "FFTAligner",
     "FeatureAligner",

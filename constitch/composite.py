@@ -582,14 +582,14 @@ class CompositeImage:
             iterable = enumerate(positions)
 
         for index, pos in iterable:
-            self.boxes[index].pos2[:] = pos + self.boxes[index].size
-            self.boxes[index].pos1[:] = pos
+            self.boxes[index].pos2[:2] = pos + self.boxes[index].size[:2]
+            self.boxes[index].pos1[:2] = pos
 
     @property
     def positions(self):
         return self.boxes.pos1
 
-    def merge(self, other_composite, other_constraints=None, new_layer=False, align_coords=False):
+    def merge(self, other_composite, *other_constraint_sets, new_layer=False, align_coords=False):
         """ Adds all images and constraints from another montage into this one.
             
             other_composite: CompositeImage
@@ -626,7 +626,13 @@ class CompositeImage:
         if align_coords:
             pass
 
-        return self.subcomposite(list(range(start_index, len(self.images))))
+        subcomposite = self.subcomposite(list(range(start_index, len(self.images))))
+        constraint_sets = [subcomposite.convert(const_set) for const_set in other_constraint_sets]
+
+        if len(constraint_sets) == 0:
+            return subcomposite
+        else:
+            return [subcomposite] + constraint_sets
 
     def align_disconnected_regions(self, num_test_points=0.05, expand_range=5):
         """ Looks at the current constraints in this composite and sees if there are any images or
@@ -809,7 +815,13 @@ class CompositeImage:
         num_samples = num_samples or min(250, max(10, len(self.images) // 4))
         rng = np.random.default_rng(random_state)
 
-        fake_consts = self.constraints(max_overlap_ratio=-2, limit=num_samples)
+        fake_consts = self.constraints(max_overlap_ratio_x=-2, max_overlap_ratio_y=-2, limit=num_samples)
+        if len(fake_consts) == 0:
+            fake_consts = self.constraints(max_overlap_ratio_x=-0.1, max_overlap_ratio_y=-0.1, limit=num_samples)
+            if len(fake_consts) == 0:
+                warnings.warn("Unable to find enough non-overlapping constraints to estimate score threshold. Defaulting to 0.5")
+                return 0.5
+
         fake_consts = fake_consts.calculate()
         
         real_consts = rng.choice([const for const in self.constraints.values() if not const.modeled], size=num_samples)
@@ -1003,7 +1015,7 @@ class CompositeImage:
         const_groups = [constraints.keys()]
         names = ['']
         if score_func == 'accuracy':
-            score_func = self.constraint_error
+            score_func = lambda const: np.linalg.norm(const.difference)
 
         if self.boxes[0].pos1.shape[0] == 3:
             groups = []
@@ -1014,11 +1026,11 @@ class CompositeImage:
             print (vals)
             for val in vals:
                 groups.append([i for i in range(len(self.boxes)) if self.boxes[i].pos1[2] == val])
-                const_groups.append([(i,j) for (i,j) in constraints if self.boxes[i].pos1[2] == val and self.boxes[j].pos1[2] == val])
+                const_groups.append([(i,j) for (i,j) in constraints.keys() if self.boxes[i].pos1[2] == val and self.boxes[j].pos1[2] == val])
                 names.append('(plane z={})'.format(val))
 
             new_const_groups = {}
-            for i,j in constraints:
+            for i,j in constraints.keys():
                 pair = (self.boxes[i].pos1[2], self.boxes[j].pos1[2])
                 if pair[0] == pair[1]: continue
                 new_const_groups[pair] = new_const_groups.get(pair, [])
@@ -1054,7 +1066,7 @@ class CompositeImage:
                     #print (i, j, constraint)
                 pos = np.mean((pos1, pos2), axis=0)
                 poses.append((pos[1], -pos[0]))
-                score = constraint.score if score_func is None else score_func(i, j, constraint)
+                score = constraint.score if score_func is None else score_func(constraint)
                 colors.append(score)
                 sizes.append(50 if constraint.modeled else 200)
                 axis.arrow(pos[1] - constraint.dy/2, -pos[0] + constraint.dx/2, constraint.dy/1, -constraint.dx/1,
@@ -1330,4 +1342,18 @@ class SubCompositeImage(CompositeImage):
 
     def layer(self, index):
         raise "SubComposites cannot contain layers"
+
+    def convert(self, constraints):
+        if constraints.composite is self.composite:
+            raise "Passed constraints are already converted"
+
+        consts = []
+        for const in constraints._constraint_iter():
+            const = Constraint(self.composite, **const.to_obj())
+            const.index1 = self.mapping[const.index1]
+            const.index2 = self.mapping[const.index2]
+            consts.append(const)
+
+        newset = ConstraintSet(consts)
+        return newset
 
