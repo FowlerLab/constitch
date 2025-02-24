@@ -1,4 +1,5 @@
 import os
+import sys
 import time
 import numpy as np
 import sklearn.linear_model
@@ -138,7 +139,7 @@ class OutlierSolver:
             diffs = np.linalg.norm(diffs, axis=1)
 
             print ("Solved", len(constraints), "constraints, with error: min {} max".format(
-                    np.percentile(diffs, (0,1,5,50,95,99,100)).astype(int)))
+                    np.percentile(diffs, (0,1,5,50,95,99,100)).astype(int)), file=sys.stderr)
 
             max_diffs = {}
             for pair, diff in zip(constraints.keys(), diffs):
@@ -152,7 +153,7 @@ class OutlierSolver:
                     fully_solved = False
                     del constraints[pair]
 
-            print ('now', len(constraints), 'constraints')
+            print ('now', len(constraints), 'constraints', file=sys.stderr)
 
         return poses
         #return poses, constraints
