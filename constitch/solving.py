@@ -132,31 +132,39 @@ class OutlierSolver:
             poses = self.solver.solve(constraints, initial_poses)
 
             diffs = []
+            errors = []
             for (id1, id2), constraint in constraints.items():
                 new_offset = poses[id2] - poses[id1]
                 diffs.append((new_offset[0] - constraint.dx, new_offset[1] - constraint.dy))
+                errors.append(constraint.error)
             diffs = np.array(diffs)
             diffs = np.linalg.norm(diffs, axis=1)
+            errors = np.array(errors)
+            min_error = errors.min()
 
             print ("Solved", len(constraints), "constraints, with error: min {} max".format(
                     np.percentile(diffs, (0,1,5,50,95,99,100)).astype(int)), file=sys.stderr)
 
             max_diffs = {}
-            for pair, diff in zip(constraints.keys(), diffs):
-                max_diffs[pair[0]] = max(max_diffs.get(pair[0], 0), diff)
-                max_diffs[pair[1]] = max(max_diffs.get(pair[1], 0), diff)
+            for pair, diff, error in zip(constraints.keys(), diffs, errors):
+                if error == min_error:
+                    max_diffs[pair[0]] = max(max_diffs.get(pair[0], 0), diff)
+                    max_diffs[pair[1]] = max(max_diffs.get(pair[1], 0), diff)
 
             fully_solved = True
 
-            for pair, diff in zip(list(constraints.keys()), diffs):
-                if diff > self.outlier_threshold and max_diffs[pair[0]] == diff and max_diffs[pair[1]] == diff and not constraints[pair].modeled:
+            for pair, diff, error in zip(list(constraints.keys()), diffs, errors):
+                if (diff > self.outlier_threshold and error == min_error
+                        and max_diffs[pair[0]] == diff and max_diffs[pair[1]] == diff
+                        and not constraints[pair].modeled):
                     fully_solved = False
                     del constraints[pair]
 
             print ('now', len(constraints), 'constraints', file=sys.stderr)
+            #break
 
-        return poses
-        #return poses, constraints
+        #return poses
+        return poses, constraints
 
 
 

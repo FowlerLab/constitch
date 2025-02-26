@@ -383,13 +383,21 @@ class ConstraintSet:
         return ((pair, const_list[0]) for pair, const_list in self.constraints.items())
 
 
-    ATTRS = ['dx', 'dy', 'score', 'error', 'overlap', 'overlap_x', 'overlap_y', 'overlap_ratio', 'overlap_ratio_x', 'overlap_ratio_y', 'size']
+    ATTRS = ['dx', 'dy', 'score', 'error', 'overlap', 'overlap_x', 'overlap_y', 'overlap_ratio', 'overlap_ratio_x', 'overlap_ratio_y', 'size', 'difference']
     def __getattr__(self, name):
         if name not in self.ATTRS:
             return getattr(super(), name)
         runfilters()
         return np.array([getattr(const, name) for const in self.constraints])
 
+    def neighborhood_difference(self, constraint):
+        touching_constraints = self.filter(lambda const: const.index1 in constraint.pair or const.index2 in constraint.pair)
+        diffs = touching_constraints.difference
+        max_diff = np.max(np.linalg.norm(diffs))
+        curdiff = np.linalg.norm(constraint.difference)
+        if max_diff > curdiff:
+            curdiff = 0
+        return curdiff
 
     def calculate(self, aligner=None, executor=None):
         futures = [const.calculate_future(aligner=aligner, executor=executor) for const in self]
@@ -465,6 +473,13 @@ class ConstraintSet:
             constraints[const.pair] = const
 
         newposes = solver.solve(constraints, poses)
+        if type(newposes) == tuple:
+            newposes, constraints = newposes
+            pairs = set(constraints.keys())
+            for pair in list(self.constraints.keys()):
+                if pair not in pairs:
+                    self._remove_single(pair)
+
         return newposes
 
 
@@ -479,15 +494,15 @@ class ConstraintSet:
             const_list.insert(index, constraint)
         return const_list[0]
 
-    def _remove_single(self, constraints):
+    def _remove_single(self, constraint):
         pair = constraint
-        if isinstance(constraint, Constrant):
+        if isinstance(constraint, Constraint):
             pair = constraint.pair
 
         const_list = self.constraints[pair]
 
         index = 0
-        if isinstance(constraint, Constrant):
+        if isinstance(constraint, Constraint):
             index = const_list.index(constraint)
         const_list.pop(index)
 
