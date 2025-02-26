@@ -387,7 +387,6 @@ class ConstraintSet:
     def __getattr__(self, name):
         if name not in self.ATTRS:
             return getattr(super(), name)
-        runfilters()
         return np.array([getattr(const, name) for const in self.constraints])
 
     def neighborhood_difference(self, constraint):
