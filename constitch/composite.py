@@ -1005,7 +1005,7 @@ class CompositeImage:
             return full_image, mask
         return full_image
 
-    def plot_scores(self, path, constraints=None, score_func=None):
+    def plot_scores(self, path, constraints=None, score_func=None, axis_size=12):
         import matplotlib.pyplot as plt
         import matplotlib.patches
 
@@ -1041,7 +1041,7 @@ class CompositeImage:
                 const_groups.append(consts)
                 names.append('(consts z={} -> z={})'.format(pair[0], pair[1]))
 
-        axis_size = 12
+        #axis_size = 12
         grid_size = math.ceil(np.sqrt(len(groups)))
         fig, axes = plt.subplots(nrows=grid_size, ncols=grid_size, figsize=(axis_size*grid_size,axis_size*grid_size), squeeze=False, sharex=True, sharey=True)
 
