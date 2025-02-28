@@ -187,7 +187,7 @@ def save(path, composite, *constraint_sets, save_images=True):
         with open(path, 'wb') as ofile:
             pickle.dump(obj, ofile)
 
-def load(path, **kwargs):
+def load(path, constraints=True, **kwargs):
     from .composite import CompositeImage
     from .constraints import Constraint, ConstraintSet
     if isinstance(path, io.IOBase):
@@ -197,8 +197,9 @@ def load(path, **kwargs):
 
     composite = CompositeImage.from_obj(obj['composite'], **kwargs)
     constraint_sets = []
-    for const_set_obj in obj['constraint_sets']:
-        constraint_sets.append(ConstraintSet(Constraint(composite, **const_obj) for const_obj in const_set_obj))
+    if constraints:
+        for const_set_obj in obj['constraint_sets']:
+            constraint_sets.append(ConstraintSet(Constraint(composite, **const_obj) for const_obj in const_set_obj))
 
     if len(constraint_sets) == 0:
         return composite
