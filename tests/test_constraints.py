@@ -53,7 +53,32 @@ class TestConstraint(unittest.TestCase):
         expected = {(0, 1), (0, 4), (0, 5), (14, 15), (11, 15), (10, 15)}
         self.assertEqual(set(neighboring.constraints.keys()), expected)
 
+    def test_solving(self):
+        constraints = self.composite.constraints(touching=True)
+        for const in constraints:
+            const.score = 0.5
+        result = constraints.solve()
+        for index, pos in result.positions.items():
+            self.assertEqual(tuple(pos), tuple(self.composite.boxes[index].pos1))
+
+        prevposes = self.composite.boxes.pos1.tolist()
+        self.composite.apply(result)
+        self.assertEqual(prevposes, self.composite.boxes.pos1.tolist())
+
+    def test_random(self):
+        for bounds in [5, 200, 3498, 339, 11]:
+            values = set()
+            value = 1
+            while value not in values:
+                values.add(value)
+                value = constitch.utils.lfsr(value, bounds)
+                self.assertTrue(value <= bounds and value > 0)
+            self.assertEqual(len(values), bounds)
+
+        constraints = self.composite.constraints()
+        constraints2 = self.composite.constraints(random=True)
+        self.assertEqual(set(const.pair for const in constraints), set(const.pair for const in constraints2))
+
 if __name__ == '__main__':
-    print ('running')
     unittest.main()
 

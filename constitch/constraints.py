@@ -8,6 +8,8 @@ import warnings
 import numpy as np
 import sklearn.linear_model
 
+from . import utils
+
 class ConstraintType(enum.Enum):
     NORMAL = 'normal'
     MODELED = 'modeled'
@@ -301,7 +303,7 @@ class ConstraintFilter:
     Filters can be created and combined with & or | and passed to ConstraintSet.filter() to select for
     specific constraints.
     """
-    def __init__(self, obj, **kwargs):
+    def __init__(self, obj=None, **kwargs):
         """ A filter can be constructed in multiple ways:
         
         ConstraintFilter(params)
@@ -376,7 +378,7 @@ class ConstraintFilter:
         return True
 
     def __and__(self, other):
-        """ Combines two filters, creating a new filter that only evaluates
+        """ Combines two filters, creating a new filter that evaluates
         to True when both others evaluate to True
         """
         mins = self.mins.copy()
@@ -400,7 +402,12 @@ class ConstraintFilter:
             else:
                 func = lambda constraint, filter1=func, filter2=other.func: filter1(constraint) and filter2(constraint)
 
-        return ConstraintFilter(func=func, mins=mins, maxes=maxes, equals=equals)
+        newfilter = ConstraintFilter()
+        newfilter.func = func
+        newfilter.mins = mins
+        newfilter.maxes = maxes
+        newfilter.equals = equals
+        return newfilter
 
     def __or__(self, other):
         """ Combines two filters, creating a new filter that evaluates
@@ -487,8 +494,12 @@ class ConstraintSet:
             for const in self._constraint_iter(other):
                 self._remove_single(const)
 
-    def merge(self, other):
-        """ Returns a new ConstaintSet combined from self and other
+    def merge(self, other, *others):
+        """ Returns a new ConstaintSet with combined constraints from this and other sets
+
+        As with add(), if constraints between the same image pair are present in both sets
+        then the constraint with the lowest error is kept, with ties defaulting to constraints in the
+        last passed in set
         
         Args:
             other (Constraint or sequence of Constraints): Constraint or Constraints to
@@ -500,32 +511,61 @@ class ConstraintSet:
         new_set = ConstraintSet()
         new_set.add(self)
         new_set.add(other)
+        for another in others:
+            new_set.add(another)
         return new_set
 
-    def filter(self, obj=None, limit=None, **kwargs):
+    def filter(self, obj=None, limit=None, random=False, sorted_by=None, **kwargs):
         """ Returns a new ConstraintSet with only constraints that are
         matching the specified filter.
+
         Either a ConstraintFilter instance can be passed in or an object that
         can be converted into a filter, ie a dictionary or a set of keyword arguments.
         See ConstraintFilter for the full documentation on creating a filter.
+
+        Args:
+            obj: The filter or object to be converted into a filter. Can be many types:
+                If it is a ConstraintFilter or a callable it is applied as the filter
+                If it is a numpy bool array, it is used to filter constraint, mapping with
+                the order of self.constraints
+                If it is a set or list of pairs of indices, only constraints for those pairs are kept
+            limit (int): The maximum number of constraints returned
+            random (bool): If true the constraints are shuffled
+                Normally used in conjunction with the limit argument to select a random
+                sample of the constraints
+            sorted_by (function or str): key to sort constraints on
+                Either a function that can be passed as a key to sorted() or a string
+                that is an attribute of a constraint. Used to sort the constraints, normally
+                used with the limit argument
+            kwargs: Any keyword arguments are passed to a new ConstraintFilter() constructor
+                and applied as a filter
+
+        Returns:
+            A new ConstraintSet with the filtered Constraints
         """
+        filters = ConstraintFilter()
         if isinstance(obj, ConstraintFilter):
             filters = obj
-        elif isinstance(obj, dict):
-            newset = ConstraintSet()
-            for pair, val in obj.items():
-                if val:
-                    newset.add(self[pair])
-            return newset
-        elif obj is None:
-            filters = ConstraintFilter(kwargs)
-        else:
+        elif isinstance(obj, np.ndarray) and obj.dtype == bool:
+            return ConstraintSet(const for const, valid in zip(self.constraints, obj) if valid)
+        elif isinstance(obj, set) or isinstance(obj, list):
+            return ConstraintSet(self.constraints[pair] for pair in obj)
+        elif obj is not None:
             filters = ConstraintFilter(obj)
 
-        if limit is None:
-            newset = ConstraintSet(filter(filters, self._constraint_iter()))
-        else:
-            newset = ConstraintSet(filter(filters, itertools.islice(self._constraint_iter(), limit)))
+        if kwargs:
+            filters = filters & ConstraintFilter(kwargs)
+
+        iterable = self._constraint_iter()
+        if random:
+            iterable = self._random_iter()
+        if sorted_by is not None:
+            iterable = self._sorted_iter(sorted_by=sorted_by)
+
+        if limit is not None:
+            iterable = itertools.islice(iterable, limit)
+
+        newset = ConstraintSet(filter(filters, iterable))
 
         return newset
 
@@ -537,9 +577,14 @@ class ConstraintSet:
         """
         return next(iter(self.filter(obj, limit=1, **kwargs)))
 
-    def neighboring(self, constraint, max_dist=1):
+    def neighboring(self, constraint, depth=1):
         """ Returns a new ConstraintSet containing only constraints that
         are connected to an initial constraint or image
+
+        The starting location is specified by passing either a constraint, a
+        image index, or a sequence of either. Constraints are added by BFS to
+        the requested depth. Any constraints provided as a starting location
+        are not included in the resulting set
         """
         indices = set()
         exclude = set()
@@ -556,7 +601,7 @@ class ConstraintSet:
 
         make_indices(constraint)
 
-        for i in range(max_dist-1):
+        for i in range(depth-1):
             new_indices = set()
             for const in self:
                 if const.index1 in indices:
@@ -568,6 +613,8 @@ class ConstraintSet:
         return self.filter(lambda const: const.pair not in exclude and (const.index1 in indices or const.index2 in indices))
 
     def __iter__(self):
+        """ Iterates through all constraints in this set
+        """
         return iter(self.constraints.values())
         #return iter(const_list[0] for const_list in self.constraints.values())
 
@@ -579,6 +626,8 @@ class ConstraintSet:
         #return self.constraints[pair][0]
 
     def __contains__(self, obj):
+        """ Tests if a Constraint or a pair is contained
+        """
         if isinstance(obj, Constraint):
             return obj.pair in self.constraints and obj is self.constraints[obj.pair]
         else:
@@ -598,11 +647,17 @@ class ConstraintSet:
 
     ATTRS = ['dx', 'dy', 'score', 'error', 'overlap', 'overlap_x', 'overlap_y', 'overlap_ratio', 'overlap_ratio_x', 'overlap_ratio_y', 'size', 'difference']
     def __getattr__(self, name):
+        """ Some attributes of Constraint can be accessed from a ConstraintSet, returned as a numpy
+        array of the values for all constraints, in the order of self.keys()
+        """
         if name not in self.ATTRS:
             return getattr(super(), name)
         return np.array([getattr(const, name) for const in self])
 
     def neighborhood_difference(self, constraint):
+        """ A metric that measures how well this constraint matches the image
+        positions, taking into account neighboring constraints.
+        """
         touching_constraints = self.neighboring(constraint)
         diffs = touching_constraints.difference
         max_diff = np.max(np.linalg.norm(diffs))
@@ -612,12 +667,50 @@ class ConstraintSet:
         return curdiff
 
     def calculate(self, aligner=None, executor=None):
+        """ Calculates new constraints using an alignment algorithm
+
+        For every constraint the provided aligner is invoked to calculate
+        a new constraint. See constitch.alignment for more information on
+        alignment.
+
+        Args:
+            aligner (constitch.Aligner): default self.composite.aligner
+                The aligner that is used to calculate the new constraints
+            executor (concurrent.futures.Executor): default self.composite.executor
+                A thread or process pool instance to parallelize the computation,
+                as some aligners can be quite slow
+        """
         futures = [const._calculate_future(aligner=aligner, executor=executor) for const in self]
         newset = ConstraintSet(future.result() for future in self.progress(futures))
         self.debug("Calculated", len(futures), "new constraints")
         return newset
 
     def fit_model(self, model=None, outliers=False, random_state=12345):
+        """ Fits a linear model to the constraints in this set
+
+        This learns the motion of the microscope stage, which can be used to fill in
+        constraints in areas where there are not enough features to align.
+
+        The model is trained on the relation between the offset in image positions,
+        that is box2.pos1 - bos1.pos1, and the offset specified in dx and dy.
+
+        Args:
+            model (sklearn base model): default constitch.SimpleOffsetModel()
+                The linear model to train, it should be a sklearn model class, meaning
+                it has a fit and predict method. The fit method is called
+                with X as a 4 column matrix containing the x and y positions of image1 and image2
+                for all constraints, and y as a 2 column matrix with dx and dy for all constraints
+            outliers (bool): Whether to use an outlier resistant model
+                If set to True the provided model is wrapped in sklearn.linear_model.RANSACRegressor,
+                and the inlier and outlier classifications are added onto the returned
+                result as result.inliers and result.outliers. These are new ConstraintSets
+                containing only the inliers and outliers that the model classified
+            random_state: the random state passed to RANSACRegressor when outliers=True
+
+        Returns:
+            An Aligner class that can be used to calculate new constraints, using
+            the linear model fit here.
+        """
         from . import stage_model
         model = model or stage_model.SimpleOffsetModel()
 
@@ -654,8 +747,10 @@ class ConstraintSet:
             self.debug ("Estimated stage model", model, "with an r2 score of", model.score(est_poses, const_poses),
                     ", classifying {}/{} constraints as outliers".format(np.sum(~model.inlier_mask_), len(self.constraints)))
 
-            aligner.inliers = dict(zip(self.constraints.keys(), model.inlier_mask_))
-            aligner.outlier = dict(zip(self.constraints.keys(), ~model.inlier_mask_))
+            aligner.inliers = self.filter(model.inlier_mask_)
+            aligner.outliers = self.filter(~model.inlier_mask_)
+            #aligner.inliers = {pair for pair, inlier in zip(self.constraints.keys(), model.inlier_mask_) if inlier}
+            #aligner.outliers = {pair for pair, inlier in zip(self.constraints.keys(), model.inlier_mask_) if not inlier}
 
         else:
             self.debug ("Estimated stage model", model, "with an r2 score of", model.score(est_poses, const_poses))
@@ -674,6 +769,18 @@ class ConstraintSet:
         return aligner
 
     def solve(self, solver=None):
+        """ Solve the constraints to get a global position for each image
+
+        Args:
+            solver (constitch.Solver): default constitch.LinearSolver()
+                The solver class that is used to combine the overconstrainted
+                system of constraints and optimize for the best global positions.
+                More info can be found in constitch.solving
+
+        Returns:
+            The solver instance, with an attribute positions containing a dict
+            mapping image indices to their global positions
+        """
         from . import solving
         solver = solver or solving.LinearSolver()
         constraints = {}
@@ -691,7 +798,9 @@ class ConstraintSet:
                 if pair not in pairs:
                     self._remove_single(pair)
 
-        return newposes
+        solver.positions = newposes
+
+        return solver
 
 
     def _add_single(self, constraint):
@@ -718,6 +827,24 @@ class ConstraintSet:
         if isinstance(constraints, dict):
             constraints = constraints.values()
         return constraints
+
+    def _random_iter(self, constraints=None):
+        constraints = list(self._constraint_iter(constraints))
+        index = utils.lfsr(1, len(constraints))
+        while index != 1:
+            yield constraints[index-1]
+            index = utils.lfsr(index, len(constraints))
+
+    def _sorted_iter(self, constraints=None, sorted_by=None):
+        constraints = self._constraint_iter(constraints)
+
+        if type(sorted_by) == str:
+            if sorted_by[0] == '-':
+                sorted_by = lambda const: -getattr(const, sorted_by[1:])
+            else:
+                sorted_by = lambda const: getattr(const, sorted_by[1:])
+
+        return sorted(constraints, key=sorted_by)
 
 
 class ImplicitConstraintDict(dict):

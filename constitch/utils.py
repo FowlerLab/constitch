@@ -205,3 +205,45 @@ def load(path, **kwargs):
     else:
         return [composite] + constraint_sets
 
+lfsr_table = [
+    0x3,
+    0x6,
+    0xC,
+    0x14,
+    0x30,
+    0x60,
+    0xB8,
+    0x110,
+    0x240,
+    0x500,
+    0xE08,
+    0x1C80,
+    0x3802,
+    0x6000,
+    0xD008,
+    0x12000,
+    0x20400,
+    0x72000,
+    0x90000,
+    0x140000,
+    0x300000,
+    0x420000,
+    0xE10000,
+]
+
+def parity(x):
+    res = 0
+    while x:
+        res ^= x & 1
+        x >>= 1
+    return res
+
+def lfsr(value, bounds):
+    bits = math.ceil(math.log2(bounds))
+    taps = lfsr_table[max(0,bits-2)]
+    while True:
+        newbit = parity(value & taps)
+        value = ((value << 1) & ((1 << bits) - 1)) | newbit
+        if value <= bounds:
+            return value
+

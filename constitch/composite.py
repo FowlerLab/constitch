@@ -128,9 +128,10 @@ class SequentialExecutor(concurrent.futures.Executor):
 
 
 class CompositeConstraintSet(ConstraintSet):
-    def __init__(self, composite, pair_func):
+    def __init__(self, composite, pair_func, random_pair_func):
         super().__init__()
         self.constraints = ImplicitConstraintDict(composite, pair_func)
+        self.random_constraints = ImplicitConstraintDict(composite, random_pair_func)
 
     def add(self, obj):
         raise "Cannot add constraints to composite, composite.constraints is read-only"
@@ -138,6 +139,13 @@ class CompositeConstraintSet(ConstraintSet):
     def __call__(self, *args, **kwargs):
         return self.filter(*args, **kwargs)
 
+    def filter(self, *args, random=False, **kwargs):
+        if random:
+            newconsts = ConstraintSet()
+            newconsts.constraints = self.random_constraints
+            return newconsts.filter(*args, **kwargs)
+        else:
+            return super().filter(*args, **kwargs)
 
 
 class CompositeImage:
@@ -336,7 +344,7 @@ class CompositeImage:
             aligner=None, precalculate=False, debug=True, progress=False, executor=None):
         self.images = []
         self.boxes = BBoxList()
-        self.constraints = CompositeConstraintSet(self, self.pair_func)
+        self.constraints = CompositeConstraintSet(self, self.pair_func, self.random_pair_func)
         self.scale = 1
         self.set_logging(debug, progress)
         self.set_executor(executor)
@@ -354,6 +362,16 @@ class CompositeImage:
         for i in range(len(self.images)):
             for j in range(i+1, len(self.images)):
                 yield i, j
+
+    def random_pair_func(self):
+        bounds = (len(self.images) + 1) * len(self.images) // 2
+        bounds = len(self.images) * len(self.images)
+        index = utils.lfsr(1, bounds)
+        while index != 1:
+            pair = (index - 1) // len(self.images), (index - 1) % len(self.images)
+            if pair[0] < pair[1]:
+                yield pair
+            index = utils.lfsr(index, bounds)
 
     def set_executor(self, executor):
         self.executor = executor or SequentialExecutor()
@@ -574,10 +592,13 @@ class CompositeImage:
 
     def apply(self, positions):
         """ Applies new positions to images in this composite. positions is either a dict
-        mapping image indices to new positions or a sequence of new positions.
+        mapping image indices to new positions, a sequence of new positions, or a constitch.Solver
+        class that has had solve() run on it, usually from ConstraintSet.solve
         """
         if type(positions) == dict:
             iterable = positions.items()
+        if isinstance(positions, solving.Solver):
+            iterable = positions.positions.items()
         else:
             iterable = enumerate(positions)
 
@@ -1245,8 +1266,8 @@ class CompositeImage:
 
 
 class SubCompositeConstraintSet(CompositeConstraintSet):
-    def __init__(self, composite, pair_func, mapping):
-        super().__init__(composite, pair_func)
+    def __init__(self, composite, pair_func, random_pair_func, mapping):
+        super().__init__(composite, pair_func, random_pair_func)
         self.mapping = mapping
 
     def __getitem__(self, pair):
@@ -1297,7 +1318,7 @@ class SubCompositeImage(CompositeImage):
         self.images = SubCompositeList(self.composite.images, self.mapping)
         self.boxes = SubCompositeBBoxList(self.composite.boxes, self.mapping)
 
-        self.constraints = SubCompositeConstraintSet(self.composite, self.pair_func, mapping)
+        self.constraints = SubCompositeConstraintSet(self.composite, self.pair_func, self.random_pair_func, mapping)
         #self.scale = 1
         self.layer = layer
 
@@ -1306,6 +1327,17 @@ class SubCompositeImage(CompositeImage):
             for j in self.mapping:
                 if i < j:
                     yield i, j
+
+    def random_pair_func(self):
+        bounds = (len(self.mapping) + 1) * len(self.mapping) // 2
+        bounds = len(self.mapping) * len(self.mapping)
+        index = utils.lfsr(1, bounds)
+        while index != 1:
+            pair = (index - 1) // len(self.mapping), (index - 1) % len(self.mapping)
+            pair = mapping[pair[0]], mapping[pair[1]]
+            if pair[0] < pair[1]:
+                yield pair
+            index = utils.lfsr(index, bounds)
 
     def _add_image(self, image, box):
         self.mapping.append(len(self.composite.images))

@@ -23,7 +23,7 @@ class Solver:
         pass
 
 
-class LinearSolver:
+class LinearSolver(Solver):
     """ Solver that represents the constraints as an overconstrained system of equations, and
     solves it using least squares.
     """
@@ -120,7 +120,7 @@ class OptimalSolver(LinearSolver):
 
         return values
 
-class OutlierSolver:
+class OutlierSolver(Solver):
     def __init__(self, solver=None, outlier_threshold=1.5):
         self.solver = solver or LinearSolver()
         self.outlier_threshold = outlier_threshold
@@ -168,7 +168,7 @@ class OutlierSolver:
 
 
 
-class NeighborOutlierSolver:
+class NeighborOutlierSolver(Solver):
     def __init__(self, solver=None, testing_radius=3):
         self.solver = solver or LinearSolver()
         self.outlier_threshold = 5
