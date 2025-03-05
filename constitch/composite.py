@@ -47,8 +47,12 @@ class BBox:
             return np.all((self.pos1 <= otherbox) & (self.pos2 >= otherbox))
 
     @property
-    def size(self):
-        return self.pos2 - self.pos1
+    def bbox1(self):
+        return self.position
+
+    @property
+    def bbox2(self):
+        return self.position + self.size
 
     @property
     def center(self):
@@ -56,7 +60,6 @@ class BBox:
 
     def as2d(self):
         return BBox(self.pos1[:2], self.pos2[:2])
-
 
 
 class BBoxList:
@@ -98,6 +101,7 @@ class BBoxList:
     def __iter__(self):
         return iter(self.boxes)
 
+    @property
     def size(self):
         return self.pos2 - self.pos1
 
@@ -109,6 +113,26 @@ class BBoxList:
 
     def __str__(self):
         return "BBoxList(pos1={}, pos2={})".format(self.pos1, self.pos2)
+
+    def setpositions(self, positions):
+        """ Applies new positions to all boxes
+        Args:
+            positions (sequence of positions, dict of positions, callable):
+                Specifies a change in positions for boxes, depending on the type:
+                    If a numpy array, the new positions are set as pos1, maintaining sizes of boxes.
+                    If a dict of positions, each entry will be set as the position of the box at the key.
+                    If a callable, it is invoked for each box. If it returns a new position it is applied to the box
+        """
+
+        if isinstance(positions, np.ndarray):
+            self.pos2[...] = positions + self.boxes.size.reshape(1,-1)
+            self.pos1[...] = positions
+
+        if isinstance(positions, dict):
+            for index, pos in positions:
+                self.boxes[index].pos2 = pos + self.boxes[index]
+                self.boxes[index].setposition(pos)
+
 
 class SequentialExecutorFuture:
     def __init__(self, func, args, kwargs):
@@ -572,7 +596,7 @@ class CompositeImage:
             self.add_images(images, positions, channel_axis=-1)
 
 
-    def apply(self, positions):
+    def setpositions(self, positions):
         """ Applies new positions to images in this composite. positions is either a dict
         mapping image indices to new positions or a sequence of new positions.
         """
@@ -1280,13 +1304,18 @@ class SubCompositeBBoxList(BBoxList):
     def append(self, box):
         raise "appending to subcomposite list"
 
+    #TODO: Make these modifiable, ie composite.boxes.pos1 += 5 and composite.boxes.pos1[:,1] += 6
     @property
     def pos1(self):
-        return self.boxes.items.pos1[self.boxes.mapping]
+        pos1 = self.boxes.items.pos1[self.boxes.mapping]
+        pos1.setflags(write=False)
+        return pos1
 
     @property
     def pos2(self):
-        return self.boxes.items.pos2[self.boxes.mapping]
+        pos2 = self.boxes.items.pos2[self.boxes.mapping]
+        pos2.setflags(write=False)
+        return pos2
 
 
 class SubCompositeImage(CompositeImage):
