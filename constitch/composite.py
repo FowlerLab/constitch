@@ -55,6 +55,10 @@ class BBox:
         return self.position + self.size
 
     @property
+    def size(self):
+        return self.pos2 - self.pos1
+
+    @property
     def center(self):
         return (self.pos1 + self.pos2) / 2
 

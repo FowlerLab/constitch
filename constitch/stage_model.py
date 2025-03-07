@@ -77,7 +77,7 @@ class StageModelAligner(alignment.Aligner):
     def __init__(self, model, error=15):
         self.model = model
         self.error = error
-        self.score = 0.00001
+        self.score = 0.2
 
     def align(self, constraint, precalc1=None, precalc2=None):
         X = np.array([*constraint.box1.pos1, *constraint.box2.pos1]).reshape(1,-1)
