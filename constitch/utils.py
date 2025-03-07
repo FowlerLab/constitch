@@ -166,3 +166,7 @@ def to_rgb8(image):
     image = image.transpose((1,2,0))
     return image[:,:,:3]
 """
+
+def load(path, constraints=False):
+    from . import composite
+    return composite.CompositeImage.load(path)
