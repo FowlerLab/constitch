@@ -11,6 +11,11 @@ class TestConstraint(unittest.TestCase):
         poses = np.array([xposes.reshape(-1), yposes.reshape(-1)]).T * 75
         self.composite.add_images(images, poses)
 
+        self.small_composite = constitch.CompositeImage()
+        images = np.arange(4 * 4 * 4).reshape(4, 4, 4)
+        poses = np.array([xposes.reshape(-1), yposes.reshape(-1)]).T * 3
+        self.small_composite.add_images(images, poses[:4])
+
     def test_overlap(self):
         constraint = self.composite.constraints[0,1]
         self.assertEqual(constraint.overlap_x, 25)
@@ -59,11 +64,40 @@ class TestConstraint(unittest.TestCase):
             const.score = 0.5
         result = constraints.solve()
         for index, pos in result.positions.items():
-            self.assertEqual(tuple(pos), tuple(self.composite.boxes[index].pos1))
+            self.assertEqual(tuple(pos), tuple(self.composite.boxes[index].position))
 
-        prevposes = self.composite.boxes.pos1.tolist()
-        self.composite.apply(result)
-        self.assertEqual(prevposes, self.composite.boxes.pos1.tolist())
+        prevposes = self.composite.boxes.positions.tolist()
+        self.composite.setpositions(result)
+        self.assertEqual(prevposes, self.composite.boxes.positions.tolist())
+
+    def test_solving_outlier(self):
+        constraints = self.composite.constraints(touching=True)
+        for const in constraints:
+            const.score = 0.5
+
+        constraints[0,1].dx += 500
+        result = constraints.solve()
+        tmp = self.composite.copy()
+        tmp.plot_scores('tmp_consts.png', constraints, 'accuracy')
+        tmp.setpositions(result)
+        tmp.plot_scores('tmp_consts.png', constraints, 'accuracy')
+
+        #self.assertNotEqual(tuple(self.composite.boxes[0].position), tuple(result.positions[0]))
+        self.assertNotEqual(tuple(self.composite.boxes[1].position), tuple(result.positions[1]))
+
+        for const in constraints:
+            neigh_score = constraints.neighborhood_difference(const)
+            if const.pair == (0,1):
+                self.assertTrue(neigh_score > 5)
+            else:
+                self.assertEqual(neigh_score, 0)
+
+        constraints = constraints.filter(lambda const: constraints.neighborhood_difference(const) < 5)
+        self.assertTrue((0,1) not in constraints)
+        result = constraints.solve()
+
+        for index, pos in result.positions.items():
+            self.assertEqual(tuple(pos), tuple(self.composite.boxes[index].position))
 
     def test_random(self):
         for bounds in [5, 200, 3498, 339, 11]:
@@ -78,6 +112,9 @@ class TestConstraint(unittest.TestCase):
         constraints = self.composite.constraints()
         constraints2 = self.composite.constraints(random=True)
         self.assertEqual(set(const.pair for const in constraints), set(const.pair for const in constraints2))
+
+    def test_section(self):
+        constraints = 5
 
 if __name__ == '__main__':
     unittest.main()

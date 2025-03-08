@@ -18,17 +18,17 @@ class TestComposite(unittest.TestCase):
 
         for i in range(len(subcomposite.images)):
             self.assertIs(subcomposite.images[i], self.composite.images[mapping[i]])
-        self.assertTrue(np.all(subcomposite.boxes.pos1 == self.composite.boxes.pos1[mapping]))
+        self.assertTrue(np.all(subcomposite.boxes.positions == self.composite.boxes.positions[mapping]))
 
         subcomposite.add_image(self.composite.images[0], (20,20))
         self.assertEqual(len(mapping), 5)
         self.assertEqual(mapping[-1], len(self.composite.images) - 1)
         self.assertIs(self.composite.images[0], self.composite.images[-1])
-        self.assertEqual(subcomposite.boxes[-1].pos1.tolist(), [20, 20])
+        self.assertEqual(subcomposite.boxes[-1].position.tolist(), [20, 20])
 
         for i in range(len(subcomposite.images)):
             self.assertIs(subcomposite.images[i], self.composite.images[mapping[i]])
-        self.assertTrue(np.all(subcomposite.boxes.pos1 == self.composite.boxes.pos1[mapping]))
+        self.assertTrue(np.all(subcomposite.boxes.positions == self.composite.boxes.positions[mapping]))
 
         constraints = subcomposite.constraints(min_overlap=0)
 
@@ -46,7 +46,7 @@ class TestComposite(unittest.TestCase):
         newcomposite = constitch.CompositeImage(self.composite.images[:4], self.composite.positions[:4])
         newsub = composite.merge(newcomposite, new_layer=True)
 
-        self.assertEqual(composite.boxes.pos1.shape[1], 3)
+        self.assertEqual(composite.boxes.positions.shape[1], 3)
         self.assertEqual(newsub.mapping, composite.layer(1).mapping)
 
     def test_saving(self):
@@ -59,7 +59,7 @@ class TestComposite(unittest.TestCase):
         newcomposite, newconsts = constitch.load(file)
 
         self.assertEqual(len(newcomposite.images), len(self.composite.images))
-        self.assertEqual(newcomposite.boxes.pos1.tolist(), self.composite.boxes.pos1.tolist())
+        self.assertEqual(newcomposite.boxes.positions.tolist(), self.composite.boxes.positions.tolist())
 
         self.assertEqual(list(constraints.keys()), list(newconsts.keys()))
 
