@@ -88,10 +88,10 @@ class Constraint:
     def to_obj(self):
         return dict(
             index1=self.index1, index2=self.index2,
-            dx=self.dx, dy=self.dy,
-            score=self.score,
+            dx=int(self.dx), dy=int(self.dy),
+            score=float(self.score) if self.score is not None else None,
             error=self.error,
-            type=self.type,
+            type=self.type.value,
         )
 
     def __str__(self):

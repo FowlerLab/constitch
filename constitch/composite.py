@@ -622,19 +622,15 @@ class CompositeImage:
         self.debug("Using {} bytes ({}) for images".format(mem_images, utils.human_readable(mem_images)))
         self.debug("Total: {} ({})".format(mem_images, utils.human_readable(mem_images)))
 
-    def to_obj(self, save_images=True):
+    def to_obj(self):
         obj = dict(
-            boxes = (self.boxes.positions, self.boxes.sizes),
+            boxes = (self.boxes.positions.tolist(), self.boxes.sizes.tolist()),
             #constraints = self.constraints,
             scale = self.scale,
             positional_error = self.positional_error,
             debug = bool(self.debug),
             progress = bool(self.progress),
         )
-        if save_images:
-            obj['images'] = self.images
-        else:
-            obj['images'] = [None] * len(self.images)
 
         return obj
 
@@ -648,7 +644,8 @@ class CompositeImage:
 
         composite = cls(**params)
         positions, sizes = obj.pop('boxes')
-        composite.boxes = BBoxList(positions, sizes)
+        composite.boxes = BBoxList(np.array(positions), np.array(sizes))
+        composite.images = [None] * len(composite.boxes)
         composite.__dict__.update(obj)
         return composite
 

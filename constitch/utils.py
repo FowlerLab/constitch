@@ -172,31 +172,84 @@ def to_rgb8(image):
 """
 
 
-def save(path, composite, *constraint_sets, save_images=True):
+def save(path, composite, *constraint_sets, save_images=False, images_path=None):
+    """ Saves a CompositeImage and any number of ConstraintSet instances
+    containing constraints from the composite to a json file. All objects passed to this method
+    can be restored with a call to load()
+
+    Args:
+        path (str or io.IOBase): The path or file object to save to
+        composite (CompositeImage): The composite to be saved
+        *constraint_sets (ConstraintSet): Any ConstraintSets to be saved along with the composite.
+            These sets must contain constraints from the passed in composite.
+        save_images (bool): If True, or if images_path is specified, the images in the composite are saved using tifffile.imwrite
+            to the path or file object images_path
+        images_path (str or io.IOBase): The path or file object to save the composite images to
+            This defaults to path + '.tif'.
+    """
+
+    save_images = save_images or images_path is not None
     const_objs = []
     for constraint_set in constraint_sets:
         const_objs.append([const.to_obj() for const in constraint_set._constraint_iter()])
 
     obj = dict(
-        composite = composite.to_obj(save_images=save_images),
+        composite = composite.to_obj(),
         constraint_sets = const_objs,
     )
 
     if isinstance(path, io.IOBase):
+        if save_images:
+            if images_path is None:
+                raise ValueError('When passing a file object and save_images=True, images_path must be specified')
+            import tifffile
+            tifffile.imwrite(images_path, composite.images)
+            if type(images_path) == str:
+                obj['images'] = images_path
+
         json.dump(obj, path)
     else:
-        with open(path, 'wb') as ofile:
+        if save_images:
+            images_path = images_path or path + '.tif'
+            import tifffile
+            tifffile.imwrite(images_path, composite.images)
+            if type(images_path) == str:
+                obj['images'] = images_path
+
+        with open(path, 'w') as ofile:
             json.dump(obj, ofile)
 
-def load(path, constraints=True, **kwargs):
+def load(path, constraints=True, images_path=None, **kwargs):
+    """ Loads a CompositeImage instance and any additional CompositeSet instances
+    saved to a json file with load()
+
+    Args:
+        path (str or io.IOBase): The path or file object to read the json from
+        constraints (bool, default True): Whether to load any ConstraintSet instances
+            If False, any constraint sets saved in the file are ignored
+        images_path (str or io.IOBase): path or file object to load images from
+            Where images will be read from, using tifffile.imread
+        **kwargs: Extra arguments that are passed to CompositeImage()
+
+    Returns:
+        composite (CompositeImage): The composite read from the file
+        *constraints (ConstraintSet): Any ConstraintSet instances that
+            were saved with the composite.
+    """
     from .composite import CompositeImage
     from .constraints import Constraint, ConstraintSet
     if isinstance(path, io.IOBase):
         obj = json.load(path)
     else:
-        obj = json.load(open(path, 'rb'))
+        obj = json.load(open(path))
 
     composite = CompositeImage.from_obj(obj['composite'], **kwargs)
+
+    images_path = images_path or obj.get('images', None)
+    if images_path is not None:
+        import tifffile
+        composite.images = list(tifffile.imread(images_path))
+
     constraint_sets = []
     if constraints:
         for const_set_obj in obj['constraint_sets']:

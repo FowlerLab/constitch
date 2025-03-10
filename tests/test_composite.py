@@ -50,13 +50,15 @@ class TestComposite(unittest.TestCase):
         self.assertEqual(newsub.mapping, composite.layer(1).mapping)
 
     def test_saving(self):
-        file = io.BytesIO()
+        image_file = io.BytesIO()
+        file = io.StringIO()
 
         constraints = self.composite.constraints(min_overlap=0)
 
-        constitch.save(file, self.composite, constraints)
+        constitch.save(file, self.composite, constraints, images_path=image_file)
         file.seek(0)
-        newcomposite, newconsts = constitch.load(file)
+        image_file.seek(0)
+        newcomposite, newconsts = constitch.load(file, images_path=image_file)
 
         self.assertEqual(len(newcomposite.images), len(self.composite.images))
         self.assertEqual(newcomposite.boxes.positions.tolist(), self.composite.boxes.positions.tolist())
@@ -73,7 +75,7 @@ class TestComposite(unittest.TestCase):
                 if isinstance(attrval, np.ndarray): attrval = attrval.tolist()
                 self.assertEqual((name, attrval), (name, val))
 
-        box = fisseq.BBox([0,0], [5,3])
+        box = constitch.BBox([0,0], [5,3])
 
         # test different types setting
         assertBox(box, position=[0,0])
@@ -93,13 +95,13 @@ class TestComposite(unittest.TestCase):
         # test relationships between attrs when setting
         assertBox(box, position=[0,0], size=[5,3], point1=[0,0], point2=[5,3])
         box.position = (4,6)
-        assertBox(box, position=[4,6], size=[5,3], point1=[4,6], point2=[11,9])
+        assertBox(box, position=[4,6], size=[5,3], point1=[4,6], point2=[9,9])
         box.size = (2,1)
         assertBox(box, position=[4,6], size=[2,1], point1=[4,6], point2=[6,7])
         box.point1 = (-1,3)
         assertBox(box, position=[-1,3], size=[7,4], point1=[-1,3], point2=[6,7])
         box.point2 = (7,8)
-        assertBox(box, position=[-1,3], size=[8,5], point1=[-1,3], point2=[6,7])
+        assertBox(box, position=[-1,3], size=[8,5], point1=[-1,3], point2=[7,8])
 
 
 
