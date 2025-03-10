@@ -152,8 +152,6 @@ class BBox:
     def copy(self):
         return BBox(self._position.copy(), self._size.copy())
 
-<<<<<<< HEAD
-=======
     @property
     def bbox2(self):
         return self.position + self.size
@@ -168,7 +166,6 @@ class BBox:
 
     def as2d(self):
         return BBox(self.pos1[:2], self.pos2[:2])
->>>>>>> 7fdc88373b1359ebc774ed54a19b66c991cee9f7
 
 
 class BBoxList:
