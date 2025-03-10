@@ -152,21 +152,6 @@ class BBox:
     def copy(self):
         return BBox(self._position.copy(), self._size.copy())
 
-    @property
-    def bbox2(self):
-        return self.position + self.size
-
-    @property
-    def size(self):
-        return self.pos2 - self.pos1
-
-    @property
-    def center(self):
-        return (self.pos1 + self.pos2) / 2
-
-    def as2d(self):
-        return BBox(self.pos1[:2], self.pos2[:2])
-
 
 class BBoxList:
     """ A list of image bounding boxes, countained in a ConstraintImage.
