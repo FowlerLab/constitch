@@ -594,7 +594,7 @@ class ConstraintSet:
         if isinstance(obj, ConstraintFilter):
             filters = obj
         elif isinstance(obj, np.ndarray) and obj.dtype == bool:
-            return ConstraintSet(const for const, valid in zip(self.constraints, obj) if valid)
+            return ConstraintSet(const for const, valid in zip(self._constraint_iter(), obj) if valid)
         elif isinstance(obj, set) or isinstance(obj, list):
             return ConstraintSet(self.constraints[pair] for pair in obj)
         elif obj is not None:

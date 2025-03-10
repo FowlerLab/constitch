@@ -80,13 +80,13 @@ class LinearSolver(Solver):
     def score_func(self, constraint):
         return max(0, constraint.score)
 
-class MinimalSolver(LinearSolver):
+class OptimalSolver(LinearSolver):
     def __init__(self, **kwargs):
         super().__init__()
 
     def loss(values, solution_mat, solution_vals):
         error = np.matmul(solution_mat, values.T) - solution_vals
-        sigmoid_error = 1 / (1 + np.exp(-np.abs(error))
+        sigmoid_error = 1 / (1 + np.exp(-np.abs(error)))
 
     def solve_matrix(self, solution_mat, solution_vals, initial_values):
         values = initial_values

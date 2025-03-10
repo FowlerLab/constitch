@@ -1,6 +1,7 @@
 import numpy as np
 import io
 import pickle
+import json
 import time
 import sys
 import math
@@ -182,18 +183,18 @@ def save(path, composite, *constraint_sets, save_images=True):
     )
 
     if isinstance(path, io.IOBase):
-        pickle.dump(obj, path)
+        json.dump(obj, path)
     else:
         with open(path, 'wb') as ofile:
-            pickle.dump(obj, ofile)
+            json.dump(obj, ofile)
 
 def load(path, constraints=True, **kwargs):
     from .composite import CompositeImage
     from .constraints import Constraint, ConstraintSet
     if isinstance(path, io.IOBase):
-        obj = pickle.load(path)
+        obj = json.load(path)
     else:
-        obj = pickle.load(open(path, 'rb'))
+        obj = json.load(open(path, 'rb'))
 
     composite = CompositeImage.from_obj(obj['composite'], **kwargs)
     constraint_sets = []

@@ -271,7 +271,7 @@ class BBoxList:
         self._sizes = value - self._positions
 
     @property
-    def center(self):
+    def centers(self):
         """ The center pixel of all image boxes, rounded to the nearest pixel.
         """
         return np.round(self._positions + self._sizes / 2)
@@ -292,9 +292,10 @@ class BBoxList:
                     If a callable, it is invoked for each box. If it returns a new position it is applied to the box
         """
 
+        #TODO: make work with 2d arrays
         if isinstance(positions, solving.Solver):
             for index, pos in positions.positions.items():
-                self._positions[index] = pos
+                self._positions[index,:len(pos)] = pos
 
         if isinstance(positions, np.ndarray):
             self._positions[...] = positions
@@ -624,9 +625,10 @@ class CompositeImage:
 
     def to_obj(self, save_images=True):
         obj = dict(
-            boxes = (self.boxes._positions, self.boxes._sizes),
+            boxes = (self.boxes.positions, self.boxes.sizes),
             #constraints = self.constraints,
             scale = self.scale,
+            positional_error = self.positional_error,
             debug = bool(self.debug),
             progress = bool(self.progress),
         )
@@ -1627,7 +1629,8 @@ class SubCompositeImage(CompositeImage):
 
     def _add_image(self, image, box):
         self.mapping.append(len(self.composite.images))
-        if self.layer is not None and len(box.position) == 2:
+        if self.layer is not None:# and len(box.position) == 2:
+            assert len(box.position) > 2
             box.position = np.array([*box.position, self.layer])
             box.size = np.array([*box.size, 0])
 
@@ -1644,6 +1647,10 @@ class SubCompositeImage(CompositeImage):
     @property
     def scale(self):
         return self.composite.scale
+
+    @property
+    def positional_error(self):
+        return self.composite.positional_error
 
     @property
     def multichannel(self):
