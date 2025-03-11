@@ -74,10 +74,10 @@ class GlobalStageModel(ConversionStageModel):
 
 
 class StageModelAligner(alignment.Aligner):
-    def __init__(self, model, error=15):
+    def __init__(self, model, error=15, score=0.2):
         self.model = model
         self.error = error
-        self.score = 0.2
+        self.score = score
 
     def align(self, constraint, precalc1=None, precalc2=None):
         X = np.array([*constraint.box1.position, *constraint.box2.position]).reshape(1,-1)

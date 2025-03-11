@@ -44,7 +44,7 @@ from .alignment import calculate_offset, ncc, score_offset, Aligner, FFTAligner,
 from .stitching import stitch_cycles, make_test_image
 from .evaluation import evaluate_stitching, evaluate_grid_stitching
 from .merging import Merger, MeanMerger, EfficientMeanMerger, NearestMerger, MaskMerger, LastMerger, EfficientNearestMerger
-from .solving import LinearSolver, OptimalSolver, OutlierSolver
+from .solving import LinearSolver, OptimalSolver, OutlierSolver, QuantileSolver
 from .utils import save, load
 
 
@@ -77,6 +77,7 @@ __all__ = [
     "LinearSolver",
     "OptimalSolver",
     "OutlierSolver",
+    "QuantileSolver",
 
     "save",
     "load",

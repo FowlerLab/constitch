@@ -78,9 +78,9 @@ class TestConstraint(unittest.TestCase):
         constraints[0,1].dx += 500
         result = constraints.solve()
         tmp = self.composite.copy()
-        tmp.plot_scores('tmp_consts.png', constraints, 'accuracy')
+        #tmp.plot_scores('tmp_consts.png', constraints, 'accuracy')
         tmp.setpositions(result)
-        tmp.plot_scores('tmp_consts.png', constraints, 'accuracy')
+        #tmp.plot_scores('tmp_consts.png', constraints, 'accuracy')
 
         #self.assertNotEqual(tuple(self.composite.boxes[0].position), tuple(result.positions[0]))
         self.assertNotEqual(tuple(self.composite.boxes[1].position), tuple(result.positions[1]))
@@ -98,6 +98,20 @@ class TestConstraint(unittest.TestCase):
 
         for index, pos in result.positions.items():
             self.assertEqual(tuple(pos), tuple(self.composite.boxes[index].position))
+
+    def test_solving_optimal(self):
+        constraints = self.composite.constraints(touching=True)
+        for const in constraints:
+            const.score = 0.5
+
+        constraints[0,1].dx += 500
+        result = constraints.solve(constitch.QuantileSolver())
+        tmp = self.composite.copy()
+        #tmp.plot_scores('tmp_consts_outlier.png', constraints, 'accuracy')
+        tmp.setpositions(result)
+        #tmp.plot_scores('tmp_consts_outlier2.png', constraints, 'accuracy')
+
+        self.assertEqual(tuple(self.composite.boxes[1].position), tuple(result.positions[1]))
 
     def test_random(self):
         for bounds in [5, 200, 3498, 339, 11]:
