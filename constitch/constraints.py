@@ -83,7 +83,7 @@ class Constraint:
         self.dy = dy
         self.score = score
         self.error = error
-        self.type = type
+        self.type = ConstraintType(type)
 
     def to_obj(self):
         return dict(
