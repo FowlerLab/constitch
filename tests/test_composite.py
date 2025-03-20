@@ -10,6 +10,7 @@ class TestComposite(unittest.TestCase):
         images = np.zeros((10, 100, 100), dtype=np.uint16)
         xposes, yposes = np.meshgrid(np.arange(4), np.arange(4))
         poses = np.array([xposes.reshape(-1), yposes.reshape(-1)]).T * 75
+        poses = poses[:len(images)]
         self.composite.add_images(images, poses)
 
     def test_subcomposite(self):
@@ -102,6 +103,33 @@ class TestComposite(unittest.TestCase):
         assertBox(box, position=[-1,3], size=[7,4], point1=[-1,3], point2=[6,7])
         box.point2 = (7,8)
         assertBox(box, position=[-1,3], size=[8,5], point1=[-1,3], point2=[7,8])
+
+    def test_boxlist(self):
+        boxes = constitch.BBoxList()
+        boxes.append(constitch.BBox([0,0], [5,5]))
+        self.assertEqual(boxes._positions.shape[0], 1)
+        self.assertEqual(tuple(boxes._sizes[0]), (5,5))
+        boxes.append(constitch.BBox([0,0], [5,5]))
+        self.assertEqual(boxes._positions.shape[0], 2)
+        boxes.append(constitch.BBox([0,0], [5,5]))
+        self.assertEqual(boxes._positions.shape[0], 4)
+        boxes.append(constitch.BBox([0,0], [5,5]))
+        self.assertEqual(boxes._positions.shape[0], 4)
+
+        self.assertEqual(tuple(boxes._sizes[0]), (5,5))
+
+        boxes = constitch.BBoxList()
+        for i in range(1000):
+            boxes.append(constitch.BBox([i,i], [4,4]))
+
+        self.assertEqual(boxes.positions.shape[0], 1000)
+        self.assertEqual(boxes.sizes.shape[0], 1000)
+        self.assertEqual(boxes.points1.shape[0], 1000)
+        self.assertEqual(boxes.points2.shape[0], 1000)
+        self.assertEqual(boxes.centers.shape[0], 1000)
+
+        for i in range(1000):
+            self.assertEqual(tuple(boxes[i].position), (i,i))
 
 
 

@@ -3,6 +3,7 @@ import math
 import sys
 import numpy as np
 import skimage.io
+import skimage.registration
 import itertools
 
 from .constraints import Constraint
@@ -36,8 +37,8 @@ class Aligner:
 
     # Helper functions for subclasses:
     def resize_if_needed(self, image, box=None, downscale_factor=None, padding=None):
-        if box is not None and image.shape != tuple(box.size):
-            image = skimage.transform.resize(image, box.size)
+        if box is not None and image.shape != tuple(box.size[:2]):
+            image = skimage.transform.resize(image, box.size[:2])
         if downscale_factor is not None and downscale_factor != 1:
             image = skimage.transform.downscale_local_mean(image, downscale_factor)
         if padding is not None:
@@ -104,7 +105,7 @@ class FFTAligner(Aligner):
 
         score, dx, dy, overlap = find_peaks(fft, orig_section1, orig_section2, self.num_peaks)
 
-        newconst = constraint.new(section_dx=dx, section_dy=dy, score=score, error=0)
+        newconst = constraint.new_section(dx=dx, dy=dy, score=score, error=0)
         return newconst
 
     def align_full(self, constraint, precalc1=None, precalc2=None):
@@ -164,7 +165,7 @@ class PaddedFFTAligner(FFTAligner):
 
     def precalculate(self, image, box=None):
         if len(image.shape) == 3: image = image[:,:,0]
-        image = self.resize_if_needed(image, box, downscale_factor=self.downscale_factor, padding=box.size)
+        image = self.resize_if_needed(image, box, downscale_factor=self.downscale_factor, padding=box.size[:2])
         fft = None if not self.precalculate_fft else np.fft.fft2(image, axes=(0,1))
         return image, fft
 
@@ -208,6 +209,17 @@ class PaddedFFTAligner(FFTAligner):
         dx, dy = dx % constraint.box1.size[0], dy % constraint.box1.size[1]
         return Constraint(previous_constraint, dx=dx, dy=dy, score=score, error=0)
 
+
+class PCCAligner(Aligner):
+    """ An aligner that invokes the skimage.registration.phase_cross_correlation method
+    An alternative to the FFTAligner which implements the same algorithm
+    """
+    def __init__(self, **kwargs):
+        self.kwargs = kwargs
+
+    def align(self, constraint, precalc1=None, precalc2=None):
+        offset, error, phasediff = skimage.registration.phase_cross_correlation(constraint.section1, constraint.section2, **self.kwargs)
+        return constraint.new_section(dx=offset[0], dy=offset[1], score=error, error=0)
 
 
 class FeatureAligner(Aligner):
@@ -462,7 +474,7 @@ def interpret_translation(image1, image2, yins, xins, ymin, ymax, xmin, xmax,
 def calc_pcm(fft1, fft2):
     for i in range(fft1.shape[0]):
         val = fft1[i] * np.conjugate(fft2[i])
-        fft1[i] = val / np.abs(val)
+        fft1[i] = val / (np.abs(val) + 0.0000000000001)
     return fft1
 
 @numba.jit(nopython=True)

@@ -88,9 +88,9 @@ class Constraint:
     def to_obj(self):
         return dict(
             index1=self.index1, index2=self.index2,
-            dx=int(self.dx), dy=int(self.dy),
+            dx=float(self.dx), dy=float(self.dy),
             score=float(self.score) if self.score is not None else None,
-            error=self.error,
+            error=float(self.error),
             type=self.type.value,
         )
 
@@ -165,7 +165,7 @@ class Constraint:
         in the composite and any subsequent calls will not require any calculation
         """
         ratio_x, ratio_y = self.pixel_scale_ratio
-        return self.composite.resized_image(self.index1, ratio_x.denominator, ratio_y.denominator)
+        return self.composite.resized_image(self.index1, ratio_x.numerator, ratio_y.numerator)
 
     @property
     def resized_image2(self):
@@ -175,7 +175,7 @@ class Constraint:
         in the composite and any subsequent calls will not require any calculation
         """
         ratio_x, ratio_y = self.pixel_scale_ratio
-        return self.composite.resized_image(self.index1, ratio_x.numerator, ratio_y.numerator)
+        return self.composite.resized_image(self.index2, ratio_x.denominator, ratio_y.denominator)
 
     @property
     def section1(self):
@@ -187,9 +187,7 @@ class Constraint:
         see the docs for Aligner for more info
         """
         x1, x2, y1, y2 = self.section1_bounds
-        section = self.resized_image1[x1:x2,y1:y2]
-
-        return self.image1[x1:x2,y1:y2]
+        return self.resized_image1[x1:x2,y1:y2]
 
     @property
     def section2(self):
@@ -204,7 +202,7 @@ class Constraint:
     @property
     def section1_bounds(self):
         ratio_x, ratio_y = self.pixel_scale_ratio
-        scale_x, scale_y = ratio_x.denominator, ratio_y.denominator
+        scale_x, scale_y = ratio_x.numerator, ratio_y.numerator
 
         if self.error is None or self.error == math.inf:
             return 0, self.box1.size[0] * scale_x, 0, self.box1.size[1] * scale_y
@@ -221,7 +219,7 @@ class Constraint:
     @property
     def section2_bounds(self):
         ratio_x, ratio_y = self.pixel_scale_ratio
-        scale_x, scale_y = ratio_x.numerator, ratio_y.numerator
+        scale_x, scale_y = ratio_x.denominator, ratio_y.denominator
 
         if self.error is None or self.error == math.inf:
             return 0, self.box2.size[0] * scale_x, 0, self.box2.size[1] * scale_y
@@ -312,29 +310,48 @@ class Constraint:
         #self.composite.add_constraint(newconst)
         return future
 
-    def new(self, dx=None, dy=None, section_dx=None, section_dy=None, score=None, error=None, type=None):
+    def new(self, dx=None, dy=None, score=None, error=None, type=None):
         """ Creates a new constraint between the images of this one. Normally used
         by alignment algorithms when they calculate a
         new constraint
 
         Params:
             dx, dy, score, error, type: See docs for Constraint.__init__()
-
-            section_dx (int): The X offset between the two sections, self.section1 and self.section2
-                Aligning is normally performed on self.section1 and self.section2 as
-                they are the sections that are overlapping given the current offset and error.
-                This can cause problems as sections may be sliced or resized, so dx and dy
-                can be specified here and will be converted into the actual dx and dy
-            section_dy (int): The Y offset between the two sections
-                Same as section_dx, this is to specify the calculate the offset between self.section1
-                and section2, given any slicing or resizing that has happened
         """
-
-        if section_dx is not None:
-            dx = self.section1_bounds[0] - self.section2_bounds[0] + section_dx
-            dy = self.section1_bounds[2] - self.section2_bounds[2] + section_dy
+        type = type or ConstraintType.NORMAL
 
         return Constraint(self, dx=dx, dy=dy, score=score, error=error, type=type)
+
+    def new_rescaled(self, dx=None, dy=None, score=None, error=None, type=None):
+        """ Creates a new constraint, similar to Constraint.new. This method is used when
+        the new constraint was calculated using Constraint.resized_image1 and Constraint.resized_image2,
+        normally when aligning in an Aligner. This means that dx and dy are expected to be
+        the offsets in these resized images, and they are converted into an offset in the original image,
+        taking into account the amount each image has been resized. The error is also adjusted, eg
+        if the alignment in the rescaled images is accurate to 8 pixels but the images were upscaled by
+        4 pixels, the true error would be 2
+        """
+        ratio_x, ratio_y = self.pixel_scale_ratio
+        ratio_x = Fraction(self.image1.shape[0], self.box1.size[0]) * ratio_x.denominator
+        ratio_y = Fraction(self.image1.shape[1], self.box1.size[1]) * ratio_y.denominator
+        dx = round(dx / ratio_x)
+        dy = round(dy / ratio_y)
+        error = round(max(error / ratio_x, error / ratio_y))
+
+        return self.new(dx=dx, dy=dy, score=score, error=error, type=type)
+
+    def new_section(self, dx=None, dy=None, score=None, error=None, type=None):
+        """ Creates a new constraint, similar to Constraint.new. This method is used when
+        the new constraint was calculated using Constraint.section1 and Constraint.section2,
+        normally when aligning in an Aligner. This means that dx, dy, and error are expected to be
+        relative to the coordinate space of the sections, and are converted into an offset and error for the whole image,
+        taking into account the bounds of the sections and the amount each image has been
+        resized
+        """
+        dx = self.section1_bounds[0] - self.section2_bounds[0] + dx
+        dy = self.section1_bounds[2] - self.section2_bounds[2] + dy
+
+        return self.new_rescaled(dx=dx, dy=dy, score=score, error=error, type=type)
 
 
 def _align_job(aligner, **kwargs):

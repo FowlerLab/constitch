@@ -66,14 +66,21 @@ class LinearSolver(Solver):
 
         solution = self.solve_matrix(solution_mat, solution_vals, initial_values)
 
-        # find offset that minimizes error from rounding
-        frac_part = np.mod(solution, 1)
-        frac_mean = (np.sum(np.sin(frac_part)), np.sum(np.cos(frac_part)))
-        if frac_mean != (0,0):
-            frac_mean = np.arctan2(*frac_mean)
-            solution -= frac_mean
+        poses = solution.reshape(-1,2)
 
-        poses = np.round(solution.reshape(-1,2)).astype(int)
+        residuals = np.matmul(solution_mat, solution) - solution_vals
+        residuals = residuals.reshape(-1,2)
+        self.constraints_accuracy = dict(zip(constraints.keys(), residuals))
+
+        # find offset that minimizes error from rounding
+        for i in range(2):
+            frac_part = np.mod(poses[:,i], 1)
+            frac_mean = (np.sum(np.sin(frac_part)), np.sum(np.cos(frac_part)))
+            if frac_mean != (0,0):
+                frac_mean = np.arctan2(*frac_mean)
+                poses[:,i] -= frac_mean
+
+        poses = np.round(poses).astype(int)
         poses -= poses.min(axis=0).reshape(1,2)
 
         return self.make_positions(initial_poses, poses)

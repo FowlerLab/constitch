@@ -1,4 +1,5 @@
 import sys
+from fractions import Fraction
 import random
 import time
 import collections
@@ -42,6 +43,12 @@ class BBox:
         else:
             self._position = np.asanyarray(point1)
             self._size = point2 - np.asanyarray(point1)
+
+    def __str__(self):
+        return 'BBox(position={}, size={})'.format(self._position, self._size)
+
+    def __repr__(self):
+        return 'BBox(position={}, size={})'.format(list(self._position), list(self._size))
 
     @property
     def position(self):
@@ -172,14 +179,22 @@ class BBoxList:
         this, instead add images through the CompositeImage.add_images and similar
         methods
         """
-        self.boxes.append(box)
         if self._positions is None:
             self._positions = box._position.reshape(1,-1)
             self._sizes = box._size.reshape(1,-1)
+            self.boxes.append(box)
         else:
-            self._positions = np.concatenate([self._positions, box._position.reshape(1,-1)], axis=0)
-            self._sizes = np.concatenate([self._sizes, box._size.reshape(1,-1)], axis=0)
-            self._update_boxes()
+            if len(self.boxes) >= self._positions.shape[0]:
+                self._positions = np.concatenate([self._positions, np.zeros_like(self._positions)], axis=0)
+                self._sizes = np.concatenate([self._sizes, np.zeros_like(self._sizes)], axis=0)
+                #self._positions = np.concatenate([self._positions, box._position.reshape(1,-1)], axis=0)
+                #self._sizes = np.concatenate([self._sizes, box._size.reshape(1,-1)], axis=0)
+                self._update_boxes()
+            self._positions[len(self.boxes)] = box._position
+            self._sizes[len(self.boxes)] = box._size
+            box._position = self._positions[len(self.boxes)]
+            box._size = self._sizes[len(self.boxes)]
+            self.boxes.append(box)
 
     def resize(self, n_dims):
         """ Changes the number of dimensions all boxes in the list have. It is enforced
@@ -226,54 +241,54 @@ class BBoxList:
         Setting this will update all positions, as well as modifying slices, such
         as self.positions[:,0] += 100 would increase all x positions by 100.
         """
-        return self._positions
+        return self._positions[:len(self.boxes)]
 
     @positions.setter
     def positions(self, value):
-        self._positions[...] = value
+        self._positions[:len(self.boxes)] = value
 
     @property
     def sizes(self):
         """ The sizes of all boxes in the list as a 2d array. See BBox.size.
         Setting this will update all sizes, same as assigning to BBox.size
         """
-        return self._sizes
+        return self._sizes[:len(self.boxes)]
 
     @sizes.setter
     def sizes(self, value):
-        self._sizes[...] = value
+        self._sizes[:len(self.boxes)] = value
 
     @property
     def points1(self):
         """ The lower point of all bounding boxes in the list as a 2d array. See BBox.point1.
         """
-        points1 = self._positions
+        points1 = self._positions[:len(self.boxes)]
         points1.setflags(write=False)
         return points1
 
     @points1.setter
     def points1(self, value):
-        self._sizes[...] = self._positions + self._sizes - value
-        self._positions[...] = value
+        self._sizes[:len(self.boxes)] = self._positions[:len(self.boxes)] + self._sizes[:len(self.boxes)] - value
+        self._positions[:len(self.boxes)] = value
 
     @property
     def points2(self):
         """ The higher point of all bounding boxes in the list as a 2d array. See BBox.point2.
         Setting this will update all sizes, same as assigning to BBox.point2
         """
-        points2 = self._positions + self._sizes
+        points2 = self._positions[:len(self.boxes)] + self._sizes[:len(self.boxes)]
         points2.setflags(write=False)
         return points2
 
     @points2.setter
     def points2(self, value):
-        self._sizes = value - self._positions
+        self._sizes[:len(self.boxes)] = value - self._positions[:len(self.boxes)]
 
     @property
     def centers(self):
         """ The center pixel of all image boxes, rounded to the nearest pixel.
         """
-        return np.round(self._positions + self._sizes / 2)
+        return np.round(self._positions[:len(self.boxes)] + self._sizes[:len(self.boxes)] / 2)
 
     def __repr__(self):
         return "BBoxList(positions={}, sizes={})".format(repr(self._positions), repr(self._sizes))
@@ -297,7 +312,7 @@ class BBoxList:
                 self._positions[index,:len(pos)] = pos
 
         if isinstance(positions, np.ndarray):
-            self._positions[...] = positions
+            self._positions[:len(self.boxes)] = positions
 
         elif isinstance(positions, dict):
             for index, pos in positions.items():
@@ -683,7 +698,7 @@ class CompositeImage:
             positions = [(0,0)] * len(images)
         #assert positions is not None or boxes is not None, "Must specify positions or boxes"
         if positions is None:
-            n_dims = len(boxes[0].positions)
+            n_dims = len(boxes[0].position)
         else:
             positions = np.asarray(positions)
             n_dims = positions.shape[1]
@@ -705,9 +720,10 @@ class CompositeImage:
             scale = np.full(n_dims, scale)
 
         if boxes is not None:
-            boxes.positions[:,:2] *= scale
-            #boxes.sizes[:,:2] *= scale
+            for box in boxes:
+                box.size[:2] *= scale
         elif positions is not None:
+            assert positions.shape[0] == len(images)
             boxes = []
             for i in range(len(images)):
                 imageshape = np.ones_like(positions[i])
@@ -809,11 +825,10 @@ class CompositeImage:
 
         images = []
         positions = []
-        for xpos in np.linspace(0, image.shape[0] - tile_shape[0], grid_size[0]):
-            for ypos in np.linspace(0, image.shape[1] - tile_shape[1], grid_size[1]):
+        for xpos in np.round(np.linspace(0, image.shape[0] - tile_shape[0], grid_size[0])).astype(int):
+            for ypos in np.round(np.linspace(0, image.shape[1] - tile_shape[1], grid_size[1])).astype(int):
         #for xpos in range(0, tile_offset[0] * grid_size[0], tile_offset[0]):
             #for ypos in range(0, tile_offset[1] * grid_size[1], tile_offset[1]):
-                xpos, ypos = round(xpos), round(ypos)
                 images.append(image[xpos:xpos+tile_shape[0],ypos:ypos+tile_shape[1]])
                 positions.append((xpos, ypos))
 
@@ -846,6 +861,9 @@ class CompositeImage:
         scale_x = Fraction(scale_x).limit_denominator()
         scale_y = Fraction(scale_y).limit_denominator()
 
+        if scale_x == 1 and scale_y == 1:
+            return self.images[index]
+
         if (index, scale_x, scale_y) in self.resized_images:
             return self.resized_images[index,scale_x,scale_y]
 
@@ -853,9 +871,9 @@ class CompositeImage:
 
         image = self.images[index]
 
-        scaled_image = image.reshape(image.shape[0], 1, image.shape[1], 1, *image.shape[:2])
-        scaled_image = np.broadcast_to(scaled_image, (image.shape[0], scale_x.numerator, image.shape[1], scale_y.numerator, *image.shape[:2]))
-        scaled_image = scaled_image.reshape(image.shape[0] * scale_x.numerator, image.shape[1] * scale_y.numerator, *image.shape[:2])
+        scaled_image = image.reshape(image.shape[0], 1, image.shape[1], 1, *image.shape[2:])
+        scaled_image = np.broadcast_to(scaled_image, (image.shape[0], scale_x.numerator, image.shape[1], scale_y.numerator, *image.shape[2:]))
+        scaled_image = scaled_image.reshape(image.shape[0] * scale_x.numerator, image.shape[1] * scale_y.numerator, *image.shape[2:])
 
         self.resized_images[index,scale_x,scale_y] = scaled_image
         return scaled_image
@@ -1046,7 +1064,7 @@ class CompositeImage:
             kwargs: arguments passed to the constructor of the subcomposite
         """
         
-        if type(indices[0]) in (bool, np.bool_):
+        if len(indices) and type(indices[0]) in (bool, np.bool_):
             indices = [i for i in range(len(indices)) if indices[i]]
 
         composite = SubCompositeImage(self, indices, **kwargs)
@@ -1059,6 +1077,8 @@ class CompositeImage:
         Layers can be created when calling merge() with new_layer=True
         or manually by specifying a third dimension when adding images
         """
+        if len(self.images) == 0:
+            return self.subcomposite([], layer=index)
         assert self.boxes.positions.shape[1] == 3, "this composite doesn't contain layers"
         return self.subcomposite(self.boxes.positions[:,2] == index, layer=index)
 
@@ -1626,9 +1646,11 @@ class SubCompositeImage(CompositeImage):
     def _add_image(self, image, box):
         self.mapping.append(len(self.composite.images))
         if self.layer is not None:# and len(box.position) == 2:
-            assert len(box.position) > 2
-            box.position = np.array([*box.position, self.layer])
-            box.size = np.array([*box.size, 0])
+            if len(box.position) == 2:
+                box = BBox(np.array([*box.position, self.layer]), np.array([*box.size, 0]))
+            else:
+                box.position[2] = self.layer
+                box.size[2] = 0
 
         self.composite._add_image(image, box)
 

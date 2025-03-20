@@ -128,7 +128,25 @@ class TestConstraint(unittest.TestCase):
         self.assertEqual(set(const.pair for const in constraints), set(const.pair for const in constraints2))
 
     def test_section(self):
-        constraints = 5
+        images = [
+            np.arange(4).reshape(2,2),
+            np.arange(6).reshape(2,3),
+            np.arange(9).reshape(3,3),
+        ]
+        boxes = [constitch.BBox([0,0], [2,2]), constitch.BBox([1,1], [2,3]), constitch.BBox([0,0], [2,2])]
+        composite = constitch.CompositeImage(images=images, boxes=boxes)
+
+        constraints = composite.constraints()
+
+        for const in constraints:
+            print (const.box1, const.box2)
+            print (const.image1)
+            print (const.image2)
+            print (const.resized_image1)
+            print (const.resized_image2)
+            print (const.section1)
+            print (const.section2)
+            print ()
 
 if __name__ == '__main__':
     unittest.main()
