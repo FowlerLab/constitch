@@ -269,7 +269,7 @@ class Constraint:
         """ The overlap of the two images, as a ratio of the number of pixels overlapping
         over the maximum possible number of pixels overlapping
         """
-        return self.overlap / min(self.box1.size.prod(), self.box2.size.prod())
+        return self.overlap / min(self.box1.size[:2].prod(), self.box2.size[:2].prod())
 
     @property
     def touching(self):
@@ -626,10 +626,12 @@ class ConstraintSet:
         if sorted_by is not None:
             iterable = self._sorted_iter(sorted_by=sorted_by)
 
+        iterable = filter(filters, iterable)
+
         if limit is not None:
             iterable = itertools.islice(iterable, limit)
 
-        newset = ConstraintSet(filter(filters, iterable))
+        newset = ConstraintSet(iterable)
 
         return newset
 
@@ -730,6 +732,16 @@ class ConstraintSet:
             curdiff = 0
         return curdiff
 
+    def _batched_calculate(self, batch_size=100000, aligner=None, executor=None):
+        i = 0
+        constraint_iter = iter(self)
+        while i < len(self):
+            batch_range = range(i, min(i + batch_size, len(self)))
+            futures = [next(constraint_iter)._calculate_future(aligner=aligner, executor=executor) for j in batch_range]
+            for future in futures:
+                yield future.result()
+            i += batch_size
+
     def calculate(self, aligner=None, executor=None):
         """ Calculates new constraints using an alignment algorithm
 
@@ -744,6 +756,11 @@ class ConstraintSet:
                 A thread or process pool instance to parallelize the computation,
                 as some aligners can be quite slow
         """
+        if len(self) > 1:
+            newset = ConstraintSet(self.progress(self._batched_calculate(aligner=aligner, executor=executor), total=len(self)))
+            self.debug("Calculated", len(newset), "new constraints")
+            return newset
+
         futures = [const._calculate_future(aligner=aligner, executor=executor) for const in self]
         newset = ConstraintSet(future.result() for future in self.progress(futures))
         self.debug("Calculated", len(futures), "new constraints")

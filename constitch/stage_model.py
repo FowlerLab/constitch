@@ -69,6 +69,10 @@ class GlobalStageModel(ConversionStageModel):
     This is equivalent to just using the internal model directly, this is
     just a separate class for documentation and consistency.
     """
+    def __init__(self, model=None):
+        model = model or sklearn.linear_model.LinearRegression(fit_intercept=True)
+        super().__init__(model)
+
     def conversion_func(self, poses1, poses2):
         return np.concatenate([poses1, poses2], axis=1)
 

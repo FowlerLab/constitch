@@ -56,10 +56,10 @@ class TestComposite(unittest.TestCase):
 
         constraints = self.composite.constraints(min_overlap=0)
 
-        constitch.save(file, self.composite, constraints, images_path=image_file)
+        constitch.save(file, self.composite, constraints, images_file=image_file)
         file.seek(0)
         image_file.seek(0)
-        newcomposite, newconsts = constitch.load(file, images_path=image_file)
+        newcomposite, newconsts = constitch.load(file, images_file=image_file)
 
         self.assertEqual(len(newcomposite.images), len(self.composite.images))
         self.assertEqual(newcomposite.boxes.positions.tolist(), self.composite.boxes.positions.tolist())

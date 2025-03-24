@@ -845,6 +845,25 @@ class CompositeImage:
         """
         self.boxes.setpositions(positions)
 
+    def setimages(self, images):
+        """ Updates the images of this composite.
+
+            images (sequence or dict): The new images to be set
+                If a sequence, it must be the current length of self.images. Each
+                image is updated with the corresponding new image in the sequence.
+                If a dict, it must map from indices within the range [0, len(self.images))
+                to new images, that are set at said indices.
+                All images must be numpy arrays of shape either (W, H) or (W, H, C).
+        """
+
+        if isinstance(images, dict):
+            iterable = images.items()
+        else:
+            iterable = enumerate(images)
+
+        for i, newimage in iterable:
+            self.images[i] = newimage
+
     @property
     def positions(self):
         return self.boxes.positions
@@ -1559,6 +1578,10 @@ class SubCompositeList:
         index = self.mapping[index]
         return self.items[index]
 
+    def __setitem__(self, index, item):
+        index = self.mapping[index]
+        self.items[index] = item
+
     def append(self, item):
         raise "appending to subcomposite list"
 
@@ -1673,6 +1696,9 @@ class SubCompositeImage(CompositeImage):
     @property
     def multichannel(self):
         return self.composite.multichannel
+    @multichannel.setter
+    def multichannel(self, value):
+        self.composite.multichannel = value
 
     def contains(self, index):
         return index in self.mapping
