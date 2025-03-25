@@ -39,12 +39,12 @@ documentation of the CompositeImage.
 
 from .composite import CompositeImage, BBox, BBoxList
 from .constraints import Constraint, ConstraintSet, ConstraintFilter
-from .alignment import calculate_offset, ncc, score_offset, Aligner, FFTAligner, FeatureAligner
-#from .stage_model import StageModel
+from .alignment import calculate_offset, ncc, score_offset, Aligner, FFTAligner, FeatureAligner, PCCAligner
+from .stage_model import SimpleOffsetModel, GlobalStageModel
 from .stitching import stitch_cycles, make_test_image
 from .evaluation import evaluate_stitching, evaluate_grid_stitching
 from .merging import Merger, MeanMerger, EfficientMeanMerger, NearestMerger, MaskMerger, LastMerger, EfficientNearestMerger
-from .solving import LinearSolver, OptimalSolver, OutlierSolver
+from .solving import LinearSolver, OptimalSolver, OutlierSolver, QuantileSolver
 from .utils import save, load
 
 
@@ -64,6 +64,7 @@ __all__ = [
     "ConstraintFilter",
     "Aligner",
     "FFTAligner",
+    "PCCAligner",
     "FeatureAligner",
 
     "Merger",
@@ -77,6 +78,10 @@ __all__ = [
     "LinearSolver",
     "OptimalSolver",
     "OutlierSolver",
+    "QuantileSolver",
+
+    "SimpleOffsetModel",
+    "GlobalStageModel",
 
     "save",
     "load",
