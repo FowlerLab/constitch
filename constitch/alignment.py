@@ -60,7 +60,7 @@ class FFTAligner(Aligner):
     The algorithm is the same as described in Kuglin, Charles D. "The phase correlation image alignment method."
     http://boutigny.free.fr/Astronomie/AstroSources/Kuglin-Hines.pdf
     """
-    def __init__(self, num_peaks=2, precalculate_fft=True, downscale_factor=None):
+    def __init__(self, num_peaks=2, precalculate_fft=True, downscale_factor=None, upscale_factor=1):
         """
             num_peaks: int default 2
                 Sets the number of peaks in the resulting phase cross correlation image to be checked. Sometimes the highest
@@ -80,6 +80,7 @@ class FFTAligner(Aligner):
         self.num_peaks = num_peaks
         self.precalculate_fft = precalculate_fft
         self.downscale_factor = downscale_factor
+        self.upscale_factor = upscale_factor
 
     def precalculate(self, image, box=None):
         if len(image.shape) == 3: image = image[:,:,0]
@@ -137,12 +138,14 @@ class FFTAligner(Aligner):
             fft2 = precalc2[1]
 
         fft = calc_pcm(fft1.reshape(-1), fft2.reshape(-1)).reshape(fft1.shape)
+        if self.upscale_factor > 1:
+            fft_prod = fft
         fft = np.fft.ifft2(fft, axes=(0,1)).real
         if len(fft.shape) == 3:
             fft = fft.sum(axis=2)
             #np.sum(fft, axis=2, 
 
-        if constraint is not None and constraint.error is not None:
+        if constraint is not None and constraint.error is not None and False:
             score, dx, dy, overlap = find_peaks_estimate(fft, orig_image1, orig_image2, self.num_peaks,
                     estimate=(constraint.dx, constraint.dy), search_range=constraint.error)
             if score == -math.inf:
@@ -150,6 +153,9 @@ class FFTAligner(Aligner):
                 return
         else:
             score, dx, dy, overlap = find_peaks(fft, orig_image1, orig_image2, self.num_peaks)
+
+        if self.upscale_factor > 1:
+            dx, dy = refine_peak(fft_prod, self.upscale_factor, np.array([dx, dy]))
 
         newconst = Constraint(constraint, dx=dx, dy=dy, score=score, error=0)
 
@@ -278,6 +284,118 @@ class FeatureAligner(Aligner):
 
 
 
+
+###################################################################
+## Code lifted from skimage.registration.phase_cross_correlation ##
+###################################################################
+
+def _upsampled_dft(data, upsampled_region_size, upsample_factor=1, axis_offsets=None):
+    """
+    Upsampled DFT by matrix multiplication.
+
+    This code is intended to provide the same result as if the following
+    operations were performed:
+        - Embed the array "data" in an array that is ``upsample_factor`` times
+          larger in each dimension.  ifftshift to bring the center of the
+          image to (1,1).
+        - Take the FFT of the larger array.
+        - Extract an ``[upsampled_region_size]`` region of the result, starting
+          with the ``[axis_offsets+1]`` element.
+
+    It achieves this result by computing the DFT in the output array without
+    the need to zeropad. Much faster and memory efficient than the zero-padded
+    FFT approach if ``upsampled_region_size`` is much smaller than
+    ``data.size * upsample_factor``.
+
+    Parameters
+    ----------
+    data : array
+        The input data array (DFT of original data) to upsample.
+    upsampled_region_size : integer or tuple of integers, optional
+        The size of the region to be sampled.  If one integer is provided, it
+        is duplicated up to the dimensionality of ``data``.
+    upsample_factor : integer, optional
+        The upsampling factor.  Defaults to 1.
+    axis_offsets : tuple of integers, optional
+        The offsets of the region to be sampled.  Defaults to None (uses
+        image center)
+
+    Returns
+    -------
+    output : ndarray
+            The upsampled DFT of the specified region.
+    """
+    # if people pass in an integer, expand it to a list of equal-sized sections
+    if not hasattr(upsampled_region_size, "__iter__"):
+        upsampled_region_size = [
+            upsampled_region_size,
+        ] * data.ndim
+    else:
+        if len(upsampled_region_size) != data.ndim:
+            raise ValueError(
+                "shape of upsampled region sizes must be equal "
+                "to input data's number of dimensions."
+            )
+
+    if axis_offsets is None:
+        axis_offsets = [
+            0,
+        ] * data.ndim
+    else:
+        if len(axis_offsets) != data.ndim:
+            raise ValueError(
+                "number of axis offsets must be equal to input "
+                "data's number of dimensions."
+            )
+
+    im2pi = 1j * 2 * np.pi
+
+    dim_properties = list(zip(data.shape, upsampled_region_size, axis_offsets))
+
+    for n_items, ups_size, ax_offset in dim_properties[::-1]:
+        kernel = (np.arange(ups_size) - ax_offset)[:, None] * np.fft.fftfreq(
+            n_items, upsample_factor
+        )
+        kernel = np.exp(-im2pi * kernel)
+        # use kernel with same precision as the data
+        kernel = kernel.astype(data.dtype, copy=False)
+
+        # Equivalent to:
+        #   data[i, j, k] = kernel[i, :] @ data[j, k].T
+        data = np.tensordot(kernel, data, axes=(1, -1))
+    return data
+
+def refine_peak(image_product, upsample_factor, shift):
+    float_dtype = np.float32
+    # Initial shift estimate in upsampled grid
+    upsample_factor = np.array(upsample_factor, dtype=float_dtype)
+    shift = np.round(shift * upsample_factor) / upsample_factor
+    upsampled_region_size = np.ceil(upsample_factor * 1.5)
+    # Center of output array at dftshift + 1
+    dftshift = np.fix(upsampled_region_size / 2.0)
+    # Matrix multiply DFT around the current shift estimate
+    sample_region_offset = dftshift - shift * upsample_factor
+    cross_correlation = _upsampled_dft(
+        image_product.conj(),
+        upsampled_region_size,
+        upsample_factor,
+        sample_region_offset,
+    ).conj()
+    # Locate maximum and map back to original pixel grid
+    maxima = np.unravel_index(
+        np.argmax(np.abs(cross_correlation)), cross_correlation.shape
+    )
+    CCmax = cross_correlation[maxima]
+
+    maxima = np.stack(maxima).astype(float_dtype, copy=False)
+    maxima -= dftshift
+
+    shift += maxima / upsample_factor
+
+    #src_amp = np.sum(np.real(src_freq * src_freq.conj()))
+    #target_amp = np.sum(np.real(target_freq * target_freq.conj()))
+
+    return shift
 
 
 
