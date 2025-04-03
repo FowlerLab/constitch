@@ -92,10 +92,10 @@ class LinearSolver(Solver):
         return solution
 
     def score_func(self, constraint):
-        return max(0, constraint.score)
+        return max(0.1, constraint.score * constraint.overlap_ratio)
 
 
-class QuantileSolver(LinearSolver):
+class MAESolver(LinearSolver):
     """ Solver that performs quantile regression instead of ordinary least squares
     to solve the system of equations described by constraints. Equivalent to minimizing
     the mean absolute error, this is much more outlier resistant that minimizing MSE
@@ -109,6 +109,21 @@ class QuantileSolver(LinearSolver):
         params = dict(alpha=0, fit_intercept=False, solver='highs')
         params.update(kwargs)
         super().__init__(model=sklearn.linear_model.QuantileRegressor(**params))
+
+class HuberSolver(LinearSolver):
+    """ Solver that performs quantile regression instead of ordinary least squares
+    to solve the system of equations described by constraints. Equivalent to minimizing
+    the mean absolute error, this is much more outlier resistant that minimizing MSE
+    and should provide better results when there are erroneous constraints present.
+    This is identical to LinearSolver except that the linear model used is QuantileRegressor.
+    Any parameters passed to the constructor are forwared to the constructor of
+    sklearn.linear_model.QuantileRegressor. By default the L1 regularization constant
+    alpha=0 and fit_intercept=False, unless specified in the constructor.
+    """
+    def __init__(self, **kwargs):
+        params = dict(alpha=0, fit_intercept=False, epsilon=1)
+        params.update(kwargs)
+        super().__init__(model=sklearn.linear_model.SGDRegressor(loss='huber', **params))
 
 
 class OptimalSolver(LinearSolver):
