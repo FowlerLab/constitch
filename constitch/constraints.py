@@ -849,21 +849,47 @@ class ConstraintSet:
 
         return aligner
 
-    def solve(self, solver=None):
+    def solve(self, solver='mse', **kwargs):
         """ Solve the constraints to get a global position for each image
 
         Args:
-            solver (constitch.Solver): default constitch.LinearSolver()
-                The solver class that is used to combine the overconstrainted
+            solver (constitch.Solver or str): default constitch.LinearSolver()
+                The solver method that is used to combine the overconstrainted
                 system of constraints and optimize for the best global positions.
+				Options include 'mse' for standard least squares solving, 'mae'
+				for solving while minimizing mean absolute error, 'huber' for
+				minimizing the huber loss, or any subclass of constitch.Solver.
                 More info can be found in constitch.solving
+			**kwargs: Arguments passed to the constructor of the solver.
+				Any arguments specified here are passed to the constructor
+				of the solver, for example if solver='huber' epsilon=5 could
+				be included to change the default epsilon parameter for huber loss.
+				Cannot be specified if solver is an already instantiated constitch.Solver
+				instance.
 
         Returns:
             The solver instance, with an attribute positions containing a dict
             mapping image indices to their global positions
         """
         from . import solving
-        solver = solver or solving.LinearSolver()
+
+        if type(solver) == str:
+            solver = solver.lower()
+            if solver == 'mse':
+                solver = solving.LinearSolver
+            elif solver == 'mae':
+                solver = solving.MAESolver
+            elif solver == 'huber':
+                solver = solving.HuberSolver
+
+        if not isinstance(solver, solving.Solver):
+            if callable(solver):
+                solver = solver(**kwargs)
+            else:
+                raise ValueError('constitch.Solver class or str expected for argument solver')
+        elif len(kwargs) != 0:
+            raise ValueError('keyword arguments specified when argument solver is already instantiated constitch.Solver class')
+
         constraints = {}
         poses = {}
         for const in self:
