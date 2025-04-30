@@ -368,7 +368,7 @@ class CompositeImage:
     This class encapsulates the whole stitching process, the smallest example of stitching is
     shown below:
 
-        composite = fisseq.stitching.CompositeImage()
+        composite = constitch.CompositeImage()
         composite.add_images(images)
         composite.calc_constraints()
         composite.filter_constraints()
@@ -418,7 +418,7 @@ class CompositeImage:
     Setting the aligner
 
     The aligner of the composite is a class that encapsulates the algorithm used to align two images onto
-    each other. The base class Aligner and the fisseq.alignment module have more information on the specifics but basically
+    each other. The base class Aligner and the constitch.alignment module have more information on the specifics but basically
     an aligner has a function that takes two images and returns the offset from one image to another
     that has the best overlap. This is normally measured using the normalized cross correlation
     of the overlapping regions, using the function alignment.ncc, but different aligner classes
@@ -427,7 +427,7 @@ class CompositeImage:
     The main aligner provided is the FFTAligner, which uses the phase cross correlation algorithm
     to find the best overlapping region. By default this one is used, however if you want to modify
     the parameters you can set the aligner to a new instance of it. For example:
-        composite.set_aligner(fisseq.stitching.FFTAligner(num_peaks=5, precalculate_fft=False))
+        composite.set_aligner(constitch.FFTAligner(num_peaks=5, precalculate_fft=False))
 
     The other aligner provided is the FeatureAligner, which uses feature based methods to align the images.
     This is quite a bit faster than the FFTAligner, but it is not as accurate or reliable, so be aware that
@@ -558,7 +558,7 @@ class CompositeImage:
     images. To estimate these constraints we use the methods estimate_stage_model() and model_constraints().
         composite.estimate_stage_model()
         composite.model_constraints()
-    More information can be found in the docs for each function, and about the different possible stage models at fisseq.stage_model
+    More information can be found in the docs for each function, and about the different possible stage models at constitch.stage_model
 
 
     Solving constraints
@@ -584,7 +584,7 @@ class CompositeImage:
 
     The method that this function merges the images together can be configured by passing a Merger instance,
     by default it will use MeanMerger. More information on mergers can be found in the docs of the Merger class
-    and the fisseq.stitching.merging module.
+    and the constitch.merging module.
     """
 
     def __init__(self, images=None, positions=None, boxes=None, scale='pixel', channel_axis=None,
