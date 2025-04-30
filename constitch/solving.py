@@ -74,10 +74,13 @@ class LinearSolver(Solver):
 
         # find offset that minimizes error from rounding
         for i in range(2):
+            break
             frac_part = np.mod(poses[:,i], 1)
-            frac_mean = (np.sum(np.sin(frac_part)), np.sum(np.cos(frac_part)))
+            frac_mean = (np.sum(np.sin(frac_part * 2 * np.pi)), np.sum(np.cos(frac_part * 2 * np.pi)))
             if frac_mean != (0,0):
-                frac_mean = np.arctan2(*frac_mean)
+                print ('frac_mean', frac_mean, file=sys.stderr)
+                frac_mean = np.arctan2(*frac_mean) / (2 * np.pi)
+                print (frac_mean, file=sys.stderr)
                 poses[:,i] -= frac_mean
 
         poses = np.round(poses).astype(int)
@@ -92,7 +95,7 @@ class LinearSolver(Solver):
         return solution
 
     def score_func(self, constraint):
-        return max(0, constraint.score)
+        return max(0, constraint.score) * max(0, constraint.overlap_ratio)
 
 
 class QuantileSolver(LinearSolver):
@@ -110,6 +113,105 @@ class QuantileSolver(LinearSolver):
         params.update(kwargs)
         super().__init__(model=sklearn.linear_model.QuantileRegressor(**params))
 
+class LPSolver(LinearSolver):
+    """ Solver that uses (integer) linear programming to find a solution minimizing the mean
+    absolute error of the system of equations specified by the constraints. This
+    differs from QuantileSolver as by using integer linear programming we can constrain
+    the resulting values to be integers, which removes any errors that might come from
+    rounding the solution values.
+    """
+    def __init__(self, integral=True):
+        super().__init__(model=None)
+        self.integral = integral
+
+    def solve_matrix(self, solution_mat, solution_vals, initial_values):
+        ### Below code mostly from sklearn.linear_model.QuantileRegressor:
+        ### https://github.com/scikit-learn/scikit-learn/blob/98ed9dc73/sklearn/linear_model/_quantile.py#L20
+
+        # After rescaling alpha, the minimization problem is
+        #     min sum(pinball loss) + alpha * L1
+        # Use linear programming formulation of quantile regression
+        #     min_x c x
+        #           A_eq x = b_eq
+        #                0 <= x
+        # x = (s0, s, t0, t, u, v) = slack variables >= 0
+        # intercept = s0 - t0
+        # coef = s - t
+        # c = (0, alpha * 1_p, 0, alpha * 1_p, quantile * 1_n, (1-quantile) * 1_n)
+        # residual = y - X@coef - intercept = u - v
+        # A_eq = (1_n, X, -1_n, -X, diag(1_n), -diag(1_n))
+        # b_eq = y
+        # p = n_features
+        # n = n_samples
+        # 1_n = vector of length n with entries equal one
+
+        n_features = solution_mat.shape[1]
+        n_params = n_features
+        n_indices = solution_mat.shape[0]
+        quantile = 0.5
+
+        c = np.concatenate(
+            [
+                np.zeros(2 * n_params),
+                np.full(n_indices, quantile),
+                np.full(n_indices, 1 - quantile),
+            ]
+        )
+
+        #eye = np.eye(n_indices, dtype=solution_mat.dtype)
+        #print (solution_mat.shape, eye.shape, file=sys.stderr)
+        #A_eq = np.concatenate([solution_mat, -solution_mat, eye, -eye], axis=1)
+        eye = scipy.sparse.eye(n_indices, dtype=solution_mat.dtype, format="csc")
+        print (solution_mat.shape, eye.shape, file=sys.stderr)
+        A_eq = scipy.sparse.hstack([solution_mat, -solution_mat, eye, -eye], format="csc")
+        b_eq = solution_vals
+
+        print (c.shape, A_eq.shape, b_eq.shape, file=sys.stderr)
+
+        if self.integral:
+            result = scipy.optimize.linprog(
+                c=c,
+                A_eq=A_eq,
+                b_eq=b_eq,
+                method='highs',
+                #options=solver_options,
+            )
+
+            solution = result.x
+            print ('Solved first problem', file=sys.stderr)
+            tmp_params = solution[:n_params] - solution[n_params:2*n_params]
+            print (np.histogram(np.mod(tmp_params, 1)), file=sys.stderr)
+
+            integrality = np.concatenate([np.ones(2 * n_params), np.zeros(2 * n_indices)])
+            lower_bounds = np.concatenate([np.floor(solution[:2*n_params]), np.zeros(2 * n_indices)])
+            upper_bounds = np.concatenate([np.ceil(solution[:2*n_params]), np.full(2 * n_indices, np.inf)])
+            print ('bounds', lower_bounds, upper_bounds, file=sys.stderr)
+
+            result = scipy.optimize.milp(
+                c=c,
+                integrality=integrality,
+                constraints=(A_eq, b_eq, b_eq),
+                bounds=scipy.optimize.Bounds(lower_bounds, upper_bounds),
+                options=dict(disp=True),
+            )
+            print ('solved integer problem', file=sys.stderr)
+
+        else:
+            result = scipy.optimize.linprog(
+                c=c,
+                A_eq=A_eq,
+                b_eq=b_eq,
+                method='highs',
+                #options=solver_options,
+            )
+
+        solution = result.x
+        solution = solution[:n_params] - solution[n_params:2*n_params]
+
+        print (solution, file=sys.stderr)
+        print (np.histogram(np.mod(solution, 1)), file=sys.stderr)
+
+        return solution
 
 class OptimalSolver(LinearSolver):
     """ Solver that solves the system of equations generated by LinearSolver by
@@ -288,7 +390,7 @@ class NeighborOutlierSolver(Solver):
         return {pair: constraints[pair] for pair in pairs}
 
 
-def SelectionSolver(Solver):
+class SelectionSolver(Solver):
     """ Solver that finds the maximal set of constraints that all align with each other
     """
 
@@ -310,4 +412,63 @@ def SelectionSolver(Solver):
 
     def find_cycles_node(self, node, edges):
         pass
+
+class SpanningTreeSolver(Solver):
+    """ Solver that finds the maximum spanning tree, and uses it to solve for
+    global positions of all images
+    """
+
+    def __init__(self):
+        pass
+
+    def solve(self, constraints, initial_poses):
+        """ Constructs a maximum spanning tree with Kruskals algorithm
+        """
+        parents = {i: i for i in initial_poses.keys()}
+        sizes = {i: 1 for i in initial_poses.keys()}
+
+        def find(i):
+            while parents[i] != i:
+                i, parents[i] = parents[i], parents[parents[i]]
+            return i
+
+        def union(i, j):
+            i, j = find(i), find(j)
+            if i == j:
+                return
+
+            if sizes[i] < sizes[j]:
+                i, j = j, i
+
+            parents[j] = i
+            sizes[i] += sizes[j]
+
+        spanning_tree = {}
+
+        for constraint in sorted(constraints.values(), key=lambda const: -const.score):
+            i, j = constraint.pair
+            i, j = find(i), find(j)
+            if i != j:
+                union(i, j)
+                spanning_tree.setdefault(constraint.pair[0], {})[constraint.pair[1]] = constraint
+                spanning_tree.setdefault(constraint.pair[1], {})[constraint.pair[0]] = constraint
+
+        final_poses = {}
+
+        def propagate(i, last_i, pos):
+            final_poses[i] = pos
+            for child, constraint in spanning_tree[i].items():
+                if child != last_i:
+                    if constraint.index1 == i:
+                        newpos = pos[0] + constraint.dx, pos[1] + constraint.dy
+                    else:
+                        newpos = pos[0] - constraint.dx, pos[1] - constraint.dy
+                    print (i, child, constraint, pos, pos[0] + constraint.dx, pos[1] + constraint.dy, file=sys.stderr)
+                    propagate(child, i, newpos)
+
+        propagate(next(iter(initial_poses.keys())), -1, (0,0))
+
+        assert set(final_poses.keys()) == set(initial_poses.keys())
+
+        return final_poses
 

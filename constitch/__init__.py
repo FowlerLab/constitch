@@ -44,7 +44,7 @@ from .stage_model import SimpleOffsetModel, GlobalStageModel
 from .stitching import stitch_cycles, make_test_image
 from .evaluation import evaluate_stitching, evaluate_grid_stitching
 from .merging import Merger, MeanMerger, EfficientMeanMerger, NearestMerger, MaskMerger, LastMerger, EfficientNearestMerger
-from .solving import LinearSolver, OptimalSolver, OutlierSolver, QuantileSolver
+from .solving import LinearSolver, OptimalSolver, OutlierSolver, QuantileSolver, SpanningTreeSolver, LPSolver
 from .utils import save, load
 
 
@@ -79,6 +79,8 @@ __all__ = [
     "OptimalSolver",
     "OutlierSolver",
     "QuantileSolver",
+    "SpanningTreeSolver",
+    "LPSolver",
 
     "SimpleOffsetModel",
     "GlobalStageModel",
