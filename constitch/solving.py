@@ -113,6 +113,9 @@ class MAESolver(LinearSolver):
         params.update(kwargs)
         super().__init__(model=sklearn.linear_model.QuantileRegressor(**params))
 
+    def score_func(self, constraint):
+        return max(0, constraint.score) * max(0, constraint.overlap_ratio)
+
 class LPSolver(LinearSolver):
     """ Solver that uses (integer) linear programming to find a solution minimizing the mean
     absolute error of the system of equations specified by the constraints. This
