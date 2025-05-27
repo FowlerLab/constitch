@@ -25,7 +25,7 @@ class Constraint:
     from global positions of images to a set of constraints between images and back
     is the main algorithm used to stitch image sets.
 
-    It is not normally necesarry to instantiate Constraint objects directly, instead
+    It is not normally necessary to instantiate Constraint objects directly, instead
     they are created from the existing image positions with CompositeImage.constraints
     or by calculating new constraints with the Constraint.calculate or ConstraintSet.calculate
     functions.
