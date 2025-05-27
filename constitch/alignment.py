@@ -8,8 +8,6 @@ import itertools
 
 from .constraints import Constraint
 
-import cv2 as cv
-
 import numba
 
 
@@ -233,6 +231,8 @@ class FeatureAligner(Aligner):
         self.num_features = num_features
 
     def precalculate(self, image, box=None):
+        import cv2 as cv
+
         image = (image / np.percentile(image, 99.9) * 255).astype(np.uint8)
         detector = cv.SIFT_create(nfeatures=self.num_features)
         
@@ -245,6 +245,8 @@ class FeatureAligner(Aligner):
         return keypoints, features
 
     def align(self, constraint, precalc1=None, precalc2=None):
+        import cv2 as cv
+
         (keypoints1, features1), (keypoints2, features2) = self.precalculate_if_needed(constraint, precalc1, precalc2)
 
         FLANN_INDEX_KDTREE = 1

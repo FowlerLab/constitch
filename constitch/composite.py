@@ -1598,6 +1598,9 @@ class SubCompositeBBoxList(BBoxList):
 
     def append(self, box):
         raise "appending to subcomposite list"
+ 
+    def copy(self):
+        return BBoxList(self.boxes.items._positions[self.boxes.mapping], self.boxes.items._sizes[self.boxes.mapping])
 
     #TODO: Make these modifiable, ie composite.boxes.pos1 += 5 and composite.boxes.pos1[:,1] += 6
     @property
@@ -1711,6 +1714,16 @@ class SubCompositeImage(CompositeImage):
 
     def layer(self, index):
         raise "SubComposites cannot contain layers"
+
+    def copy(self, **kwargs):
+        """ Creates a full copy of this composite. The only thing shared between this composite
+        and the new copy is the raw image data.
+        """
+        composite = CompositeImage(**kwargs)
+        composite.images = list(self.images)
+        composite.boxes = self.boxes.copy()
+        composite.multichannel = self.multichannel
+        return composite
 
     def convert(self, constraints):
         if constraints.composite is self.composite:

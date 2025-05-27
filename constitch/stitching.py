@@ -6,8 +6,6 @@ import numpy as np
 import glob
 import os
 import sys
-import pandas as pd
-import tqdm
 import matplotlib.pyplot as plt
 import skimage.filters
 
@@ -16,6 +14,8 @@ def stitch_cycles(images, positions, debug=True, progress=False, **kwargs):
         between cycles.
 
     """
+    import pandas as pd
+
     progress_arg = progress
     if debug: debug = print
     else: debug = lambda *args: None
