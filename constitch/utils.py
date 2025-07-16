@@ -1,7 +1,11 @@
 import numpy as np
+import io
+import pickle
+import json
 import time
 import sys
 import math
+
 
 def memory_report():
     import psutil
@@ -167,6 +171,163 @@ def to_rgb8(image):
     return image[:,:,:3]
 """
 
-def load(path, constraints=False):
-    from . import composite
-    return composite.CompositeImage.load(path)
+def save(path, composite, *constraint_sets, save_images=False, images_file=None):
+    """ Saves a CompositeImage and any number of ConstraintSet instances
+    containing constraints from the composite to a json file. All objects passed to this method
+    can be restored with a call to load()
+
+    Args:
+        path (str or io.IOBase): The path or file object to save to
+        composite (CompositeImage): The composite to be saved
+        *constraint_sets (ConstraintSet): Any ConstraintSets to be saved along with the composite.
+            These sets must contain constraints from the passed in composite.
+        save_images (bool): If True, or if images_file is specified, the images in the composite are saved using tifffile.imwrite
+            to the path or file object images_file
+        images_file (str or io.IOBase): The path or file object to save the composite images to
+            This defaults to path + '.tif'.
+    """
+    from .constraints import Constraint, ConstraintSet
+
+    save_images = save_images or images_file is not None
+    constraint_sets = list(constraint_sets)
+
+    obj = {}
+
+    if isinstance(composite, ConstraintSet):
+        constraint_sets.insert(0, composite)
+        composite = None
+    else:
+        obj['composite'] = composite.to_obj()
+
+    for constraint_set in constraint_sets:
+        obj.setdefault('constraint_sets', []).append([const.to_obj() for const in constraint_set._constraint_iter()])
+
+    if isinstance(path, io.IOBase):
+        if save_images and composite is not None:
+            if images_file is None:
+                raise ValueError('When passing a file object and save_images=True, images_file must be specified')
+            import tifffile
+            tifffile.imwrite(images_file, composite.images)
+            if type(images_file) == str:
+                obj['images'] = images_file
+
+        json.dump(obj, path)
+    else:
+        if save_images and composite is not None:
+            images_file = images_file or path + '.tif'
+            import tifffile
+            tifffile.imwrite(images_file, composite.images)
+            if type(images_file) == str:
+                obj['images'] = images_file
+
+        with open(path, 'w') as ofile:
+            json.dump(obj, ofile)
+
+
+def load(path, composite=None, constraints=True, images_file=None, **kwargs):
+    """ Loads a CompositeImage instance and any additional CompositeSet instances
+    saved to a json file with load()
+
+    Args:
+        path (str or io.IOBase): The path or file object to read the json from
+        constraints (bool, default True): Whether to load any ConstraintSet instances
+            If False, any constraint sets saved in the file are ignored
+        images_file (str or io.IOBase): path or file object to load images from
+            Where images will be read from, using tifffile.imread
+        **kwargs: Extra arguments that are passed to CompositeImage()
+
+    Returns:
+        composite (CompositeImage): The composite read from the file
+        *constraints (ConstraintSet): Any ConstraintSet instances that
+            were saved with the composite.
+    """
+    from .composite import CompositeImage
+    from .constraints import Constraint, ConstraintSet
+
+    if isinstance(path, io.IOBase):
+        obj = json.load(path)
+    else:
+        obj = json.load(open(path))
+
+    result = []
+
+    if 'composite' in obj:
+        composite = CompositeImage.from_obj(obj['composite'], **kwargs)
+
+        images_file = images_file or obj.get('images', None)
+        if images_file is not None:
+            import tifffile
+            composite.setimages(tifffile.imread(images_file))
+
+        result.append(composite)
+
+    if constraints and 'constraint_sets' in obj:
+        if composite is None:
+            raise ValueError("The file only contains a ConstraintSet, composite must be specified as an argument")
+
+        for const_set_obj in obj['constraint_sets']:
+            result.append(ConstraintSet(Constraint(composite, **const_obj) for const_obj in const_set_obj))
+
+    return result if len(result) != 1 else result[0]
+
+#def make_hex(taps):
+#    return hex(int(''.join(('1' if i+1 in taps else '0') for i in range(max(taps)))[::-1], 2))
+
+lfsr_table = [
+    0x3,
+    0x6,
+    0xC,
+    0x14,
+    0x30,
+    0x60,
+    0xB8,
+    0x110,
+    0x240,
+    0x500,
+    0xE08,
+    0x1C80,
+    0x3802,
+    0x6000,
+    0xD008,
+    0x12000,
+    0x20400,
+    0x72000,
+    0x90000,
+    0x140000,
+    0x300000,
+    0x420000,
+    0xE10000,
+    0x1200000,
+    #make_hex([26,25,24,20])
+    0x3880000,
+    #make_hex([27, 26, 25, 22])
+    0x7200000,
+    #make_hex([28, 25])
+    0x9000000,
+    #make_hex([29, 27])
+    0x14000000,
+    #make_hex([30, 29, 26, 24])
+    0x32800000,
+    #make_hex([31, 28])
+    0x48000000,
+    #make_hex([32, 30, 26, 25])
+    0xa3000000,
+]
+
+def parity(x):
+    res = 0
+    while x:
+        res ^= x & 1
+        x >>= 1
+    return res
+
+def lfsr(value, bounds):
+    bits = math.ceil(math.log2(bounds))
+    taps = lfsr_table[max(0,bits-2)]
+    while True:
+        newbit = parity(value & taps)
+        value = ((value << 1) & ((1 << bits) - 1)) | newbit
+        if value <= bounds:
+            return value
+
+>>>>>>> newconstraints

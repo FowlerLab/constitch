@@ -3,11 +3,10 @@ import math
 import sys
 import numpy as np
 import skimage.io
+import skimage.registration
 import itertools
 
 from .constraints import Constraint
-
-import cv2 as cv
 
 import numba
 
@@ -15,7 +14,7 @@ import numba
 class Aligner:
     """ Abstract class that defines an algorithm for aligning two images onto each other.
     """
-    def precalculate(self, image, shape1=None):
+    def precalculate(self, image, box):
         """ Performs an arbitrary precalculation step specific to the alignment algorithm.
         This would be a step in the algorithm that only has to be run once per image,
         and can be cached for each calculation done with the same image. The result of
@@ -23,7 +22,7 @@ class Aligner:
         """
         pass
 
-    def align(self, image1, image2, shape1=None, shape2=None, precalc1=None, precalc2=None, constraint=None):
+    def align(self, constraint, precalc1=None, precalc2=None):
         """ Performs the alignment of two images, finding the pixel offset that best aligns the
         two images. The offset should be from image1 to image2. The return value should be a Constraint
         object, with at least the dx, dy fields filled in to represent the offset of image2 needed
@@ -35,18 +34,22 @@ class Aligner:
         pass
 
     # Helper functions for subclasses:
-    def resize_if_needed(self, image, shape=None, downscale_factor=None):
-        if shape is not None and image.shape != tuple(shape):
-            image = skimage.transform.resize(image, shape)
+    def resize_if_needed(self, image, box=None, downscale_factor=None, padding=None):
+        if box is not None and image.shape != tuple(box.size[:2]):
+            image = skimage.transform.resize(image, box.size[:2])
         if downscale_factor is not None and downscale_factor != 1:
             image = skimage.transform.downscale_local_mean(image, downscale_factor)
+        if padding is not None:
+            newimage = np.zeros((image.shape[0] + padding[0], image.shape[1] + padding[1], *image.shape[2:]), image.dtype)
+            newimage[:image.shape[0],:image.shape[1]] = image
+            image = newimage
         return image
     
-    def precalculate_if_needed(self, image1, image2, shape1=None, shape2=None, precalc1=None, precalc2=None):
+    def precalculate_if_needed(self, constraint, precalc1, precalc2):
         if precalc1 is None:
-            precalc1 = self.precalculate(image1, shape1)
+            precalc1 = self.precalculate(constraint.image1, constraint.box1.size)
         if precalc2 is None:
-            precalc2 = self.precalculate(image2, shape2)
+            precalc2 = self.precalculate(constraint.image2, constraint.box2.size)
         return precalc1, precalc2
 
 
@@ -55,7 +58,7 @@ class FFTAligner(Aligner):
     The algorithm is the same as described in Kuglin, Charles D. "The phase correlation image alignment method."
     http://boutigny.free.fr/Astronomie/AstroSources/Kuglin-Hines.pdf
     """
-    def __init__(self, num_peaks=2, precalculate_fft=True, downscale_factor=None):
+    def __init__(self, num_peaks=2, precalculate_fft=True, downscale_factor=None, upscale_factor=1):
         """
             num_peaks: int default 2
                 Sets the number of peaks in the resulting phase cross correlation image to be checked. Sometimes the highest
@@ -75,21 +78,112 @@ class FFTAligner(Aligner):
         self.num_peaks = num_peaks
         self.precalculate_fft = precalculate_fft
         self.downscale_factor = downscale_factor
+        self.upscale_factor = upscale_factor
 
-    def precalculate(self, image, shape=None):
+    def precalculate(self, image, box=None):
         if len(image.shape) == 3: image = image[:,:,0]
-        image = self.resize_if_needed(image, shape, downscale_factor=self.downscale_factor)
+        image = self.resize_if_needed(image, box, downscale_factor=self.downscale_factor)
         fft = None if not self.precalculate_fft else np.fft.fft2(image, axes=(0,1))
         return image, fft
 
-    def align(self, image1, image2, shape1=None, shape2=None, precalc1=None, precalc2=None, previous_constraint=None):
+    def align(self, constraint, precalc1=None, precalc2=None):
+        return self.align_full(constraint, precalc1, precalc2)
+        section1, section2 = constraint.section1, constraint.section2
+
+        orig_section1, orig_section2 = section1, section2
+        if section1.shape != section2.shape:
+            section1, section2 = image_diff_sizes(section1, section2)
+
+        fft1 = np.fft.fft2(section1, axes=(0,1))
+        fft2 = np.fft.fft2(section2, axes=(0,1))
+
+        fft = calc_pcm(fft1.reshape(-1), fft2.reshape(-1)).reshape(fft1.shape)
+        fft = np.fft.ifft2(fft, axes=(0,1)).real
+        if len(fft.shape) == 3:
+            fft = fft.sum(axis=2)
+
+        score, dx, dy, overlap = find_peaks(fft, orig_section1, orig_section2, self.num_peaks)
+
+        newconst = constraint.new_section(dx=dx, dy=dy, score=score, error=0)
+        return newconst
+
+    def align_full(self, constraint, precalc1=None, precalc2=None):
+        image1, image2 = constraint.image1, constraint.image2
+
         if precalc1 is None:
-            image1 = self.resize_if_needed(image1, shape1, downscale_factor=self.downscale_factor)
+            image1 = self.resize_if_needed(image1, constraint.box1, downscale_factor=self.downscale_factor)
         else:
             image1 = precalc1[0]
 
         if precalc2 is None:
-            image2 = self.resize_if_needed(image2, shape2, downscale_factor=self.downscale_factor)
+            image2 = self.resize_if_needed(image2, constraint.box2, downscale_factor=self.downscale_factor)
+        else:
+            image2 = precalc2[0]
+
+        orig_image1, orig_image2 = image1, image2
+            
+        if image1.shape != image2.shape:
+            image1, image2 = image_diff_sizes(image1, image2)
+
+        if image1.shape != orig_image1.shape or precalc1 is None or precalc1[1] is None: #precalc[1] would be none if precalculate_fft is false
+            fft1 = np.fft.fft2(image1, axes=(0,1))
+        else:
+            fft1 = precalc1[1].copy() # fft1 is used for in place computation to save mem
+
+        if image2.shape != orig_image2.shape or precalc2 is None or precalc2[1] is None:
+            fft2 = np.fft.fft2(image2, axes=(0,1))
+        else:
+            fft2 = precalc2[1]
+
+        fft = calc_pcm(fft1.reshape(-1), fft2.reshape(-1)).reshape(fft1.shape)
+        if self.upscale_factor > 1:
+            fft_prod = fft
+        fft = np.fft.ifft2(fft, axes=(0,1)).real
+        if len(fft.shape) == 3:
+            fft = fft.sum(axis=2)
+            #np.sum(fft, axis=2, 
+
+        if constraint is not None and constraint.error is not None and False:
+            score, dx, dy, overlap = find_peaks_estimate(fft, orig_image1, orig_image2, self.num_peaks,
+                    estimate=(constraint.dx, constraint.dy), search_range=constraint.error)
+            if score == -math.inf:
+                #print (dx, dy, previous_constraint.dx, previous_constraint.dy, previous_constraint.error, score)
+                return
+        else:
+            score, dx, dy, overlap = find_peaks(fft, orig_image1, orig_image2, self.num_peaks)
+
+        if self.upscale_factor > 1:
+            dx, dy = refine_peak(fft_prod, self.upscale_factor, np.array([dx, dy]))
+
+        newconst = Constraint(constraint, dx=dx, dy=dy, score=score, error=0)
+
+        if self.downscale_factor:
+            newconst.dx *= self.downscale_factor
+            newconst.dy *= self.downscale_factor
+            newconst.error = self.downscale_factor
+
+        return newconst
+
+
+class PaddedFFTAligner(FFTAligner):
+
+    def precalculate(self, image, box=None):
+        if len(image.shape) == 3: image = image[:,:,0]
+        image = self.resize_if_needed(image, box, downscale_factor=self.downscale_factor, padding=box.size[:2])
+        fft = None if not self.precalculate_fft else np.fft.fft2(image, axes=(0,1))
+        return image, fft
+
+    def align(self, constraint, precalc1=None, precalc2=None):
+        image1, image2 = constraint.image1, constraint.image2
+        orig_orig_image1, orig_orig_image2 = image1, image2
+
+        if precalc1 is None:
+            image1 = self.resize_if_needed(image1, shape1, downscale_factor=self.downscale_factor, padding=shape1)
+        else:
+            image1 = precalc1[0]
+
+        if precalc2 is None:
+            image2 = self.resize_if_needed(image2, shape2, downscale_factor=self.downscale_factor, padding=shape2)
         else:
             image2 = precalc2[0]
 
@@ -114,29 +208,31 @@ class FFTAligner(Aligner):
             fft = fft.sum(axis=2)
             #np.sum(fft, axis=2, 
 
-        if previous_constraint is not None:
-            score, dx, dy, overlap = find_peaks_estimate(fft, orig_image1, orig_image2, self.num_peaks,
-                    estimate=(previous_constraint.dx, previous_constraint.dy), search_range=previous_constraint.error)
-            if score == -math.inf:
-                #print (dx, dy, previous_constraint.dx, previous_constraint.dy, previous_constraint.error, score)
-                return
-        else:
-            score, dx, dy, overlap = find_peaks(fft, orig_image1, orig_image2, self.num_peaks)
-        constraint = Constraint(dx=dx, dy=dy, score=score, overlap=overlap)
+        dx, dy = np.unravel_index(np.argmax(fft), fft.shape)
+        score = fft[dx,dy]
+        dx, dy = dx % constraint.box1.size[0], dy % constraint.box1.size[1]
+        return Constraint(previous_constraint, dx=dx, dy=dy, score=score, error=0)
 
-        if self.downscale_factor:
-            constraint.dx *= self.downscale_factor
-            constraint.dy *= self.downscale_factor
-            constraint.error = self.downscale_factor
 
-        return constraint
+class PCCAligner(Aligner):
+    """ An aligner that invokes the skimage.registration.phase_cross_correlation method
+    An alternative to the FFTAligner which implements the same algorithm
+    """
+    def __init__(self, **kwargs):
+        self.kwargs = kwargs
+
+    def align(self, constraint, precalc1=None, precalc2=None):
+        offset, error, phasediff = skimage.registration.phase_cross_correlation(constraint.section1, constraint.section2, **self.kwargs)
+        return constraint.new_section(dx=offset[0], dy=offset[1], score=error, error=0)
 
 
 class FeatureAligner(Aligner):
     def __init__(self, num_features=2000):
         self.num_features = num_features
 
-    def precalculate(self, image, shape=None):
+    def precalculate(self, image, box=None):
+        import cv2 as cv
+
         image = (image / np.percentile(image, 99.9) * 255).astype(np.uint8)
         detector = cv.SIFT_create(nfeatures=self.num_features)
         
@@ -148,8 +244,10 @@ class FeatureAligner(Aligner):
 
         return keypoints, features
 
-    def align(self, image1, image2, shape1=None, shape2=None, precalc1=None, precalc2=None):
-        (keypoints1, features1), (keypoints2, features2) = self.precalculate_if_needed(image1, image2, shape1, shape2, precalc1, precalc2)
+    def align(self, constraint, precalc1=None, precalc2=None):
+        import cv2 as cv
+
+        (keypoints1, features1), (keypoints2, features2) = self.precalculate_if_needed(constraint, precalc1, precalc2)
 
         FLANN_INDEX_KDTREE = 1
         index_params = dict(algorithm = FLANN_INDEX_KDTREE, trees = 5)
@@ -188,6 +286,118 @@ class FeatureAligner(Aligner):
 
 
 
+
+###################################################################
+## Code lifted from skimage.registration.phase_cross_correlation ##
+###################################################################
+
+def _upsampled_dft(data, upsampled_region_size, upsample_factor=1, axis_offsets=None):
+    """
+    Upsampled DFT by matrix multiplication.
+
+    This code is intended to provide the same result as if the following
+    operations were performed:
+        - Embed the array "data" in an array that is ``upsample_factor`` times
+          larger in each dimension.  ifftshift to bring the center of the
+          image to (1,1).
+        - Take the FFT of the larger array.
+        - Extract an ``[upsampled_region_size]`` region of the result, starting
+          with the ``[axis_offsets+1]`` element.
+
+    It achieves this result by computing the DFT in the output array without
+    the need to zeropad. Much faster and memory efficient than the zero-padded
+    FFT approach if ``upsampled_region_size`` is much smaller than
+    ``data.size * upsample_factor``.
+
+    Parameters
+    ----------
+    data : array
+        The input data array (DFT of original data) to upsample.
+    upsampled_region_size : integer or tuple of integers, optional
+        The size of the region to be sampled.  If one integer is provided, it
+        is duplicated up to the dimensionality of ``data``.
+    upsample_factor : integer, optional
+        The upsampling factor.  Defaults to 1.
+    axis_offsets : tuple of integers, optional
+        The offsets of the region to be sampled.  Defaults to None (uses
+        image center)
+
+    Returns
+    -------
+    output : ndarray
+            The upsampled DFT of the specified region.
+    """
+    # if people pass in an integer, expand it to a list of equal-sized sections
+    if not hasattr(upsampled_region_size, "__iter__"):
+        upsampled_region_size = [
+            upsampled_region_size,
+        ] * data.ndim
+    else:
+        if len(upsampled_region_size) != data.ndim:
+            raise ValueError(
+                "shape of upsampled region sizes must be equal "
+                "to input data's number of dimensions."
+            )
+
+    if axis_offsets is None:
+        axis_offsets = [
+            0,
+        ] * data.ndim
+    else:
+        if len(axis_offsets) != data.ndim:
+            raise ValueError(
+                "number of axis offsets must be equal to input "
+                "data's number of dimensions."
+            )
+
+    im2pi = 1j * 2 * np.pi
+
+    dim_properties = list(zip(data.shape, upsampled_region_size, axis_offsets))
+
+    for n_items, ups_size, ax_offset in dim_properties[::-1]:
+        kernel = (np.arange(ups_size) - ax_offset)[:, None] * np.fft.fftfreq(
+            n_items, upsample_factor
+        )
+        kernel = np.exp(-im2pi * kernel)
+        # use kernel with same precision as the data
+        kernel = kernel.astype(data.dtype, copy=False)
+
+        # Equivalent to:
+        #   data[i, j, k] = kernel[i, :] @ data[j, k].T
+        data = np.tensordot(kernel, data, axes=(1, -1))
+    return data
+
+def refine_peak(image_product, upsample_factor, shift):
+    float_dtype = np.float32
+    # Initial shift estimate in upsampled grid
+    upsample_factor = np.array(upsample_factor, dtype=float_dtype)
+    shift = np.round(shift * upsample_factor) / upsample_factor
+    upsampled_region_size = np.ceil(upsample_factor * 1.5)
+    # Center of output array at dftshift + 1
+    dftshift = np.fix(upsampled_region_size / 2.0)
+    # Matrix multiply DFT around the current shift estimate
+    sample_region_offset = dftshift - shift * upsample_factor
+    cross_correlation = _upsampled_dft(
+        image_product.conj(),
+        upsampled_region_size,
+        upsample_factor,
+        sample_region_offset,
+    ).conj()
+    # Locate maximum and map back to original pixel grid
+    maxima = np.unravel_index(
+        np.argmax(np.abs(cross_correlation)), cross_correlation.shape
+    )
+    CCmax = cross_correlation[maxima]
+
+    maxima = np.stack(maxima).astype(float_dtype, copy=False)
+    maxima -= dftshift
+
+    shift += maxima / upsample_factor
+
+    #src_amp = np.sum(np.real(src_freq * src_freq.conj()))
+    #target_amp = np.sum(np.real(target_freq * target_freq.conj()))
+
+    return shift
 
 
 
@@ -384,7 +594,7 @@ def interpret_translation(image1, image2, yins, xins, ymin, ymax, xmin, xmax,
 def calc_pcm(fft1, fft2):
     for i in range(fft1.shape[0]):
         val = fft1[i] * np.conjugate(fft2[i])
-        fft1[i] = val / np.abs(val)
+        fft1[i] = val / (np.abs(val) + 0.0000000000001)
     return fft1
 
 @numba.jit(nopython=True)
@@ -486,7 +696,8 @@ def find_peaks_estimate(fft, image1, image2, num_peaks, estimate, search_range):
 
 
 def image_diff_sizes(image1, image2):
-    new_shape = max(image1.shape[0], image2.shape[0]), max(image1.shape[1], image2.shape[1])
+    #new_shape = (max(image1.shape[0], image2.shape[0]), max(image1.shape[1], image2.shape[1]))
+    new_shape = tuple(np.maximum(image1.shape, image2.shape))
 
     if image1.shape != new_shape:
         newimg = np.zeros(new_shape, dtype=image1.dtype)

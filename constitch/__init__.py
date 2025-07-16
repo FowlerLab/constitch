@@ -1,5 +1,6 @@
 """
-The stitching submodule for the fisseq pipeline.
+ConStitch: A stitching library that solves the global alignment of images using
+a graph of pairwise constraints between images.
 
 Stitching is a vital step in the fisseq pipeline, as it is in any microscopy
 data pipeline, however fisseq has some requirements that make stitching even
@@ -23,28 +24,27 @@ CompositeImage class, and the simplest working example is shown below,
 it stitches together the provided images and creates a full composite image of them combined
 together:
 
-    composite = fisseq.stitching.CompositeImage()
-    composite.add_images(images)
-    composite.calc_constraints()
-    composite.filter_constraints()
-    composite.solve_constraints(filter_outliers=True)
-    full_image = composite.stitch_images()
+    composite = constitch.CompositeImage(images, positions)
+    constrants = composite.constraints(touching=True).calculate().filter(min_score=0.5)
+	composite.setpositions(constraints.solve())
+    full_image = composite.stitch()
 
 This will work with most smaller stitching problems, where images is a list of the images
-in the form of numpy arrays. A more in depth run through of the stitching process can be found in the
+in the form of numpy arrays, and positions is a numpy array of initial positions for each
+image. A more in depth run through of the stitching process can be found in the
 documentation of the CompositeImage.
-
 
 """
 
 from .composite import CompositeImage, BBox, BBoxList
-from .constraints import Constraint
-from .alignment import calculate_offset, ncc, score_offset, Aligner, FFTAligner, FeatureAligner
-#from .stage_model import StageModel
+from .constraints import Constraint, ConstraintSet, ConstraintFilter
+from .alignment import calculate_offset, ncc, score_offset, Aligner, FFTAligner, FeatureAligner, PCCAligner
+from .stage_model import SimpleOffsetModel, GlobalStageModel
 from .stitching import stitch_cycles, make_test_image
 from .evaluation import evaluate_stitching, evaluate_grid_stitching
 from .merging import Merger, MeanMerger, EfficientMeanMerger, NearestMerger, MaskMerger, LastMerger, EfficientNearestMerger
-from .utils import load
+from .solving import Solver, LinearSolver, OptimalSolver, OutlierSolver, MAESolver, SpanningTreeSolver, LPSolver
+from .utils import save, load
 
 
 __all__ = [
@@ -59,8 +59,12 @@ __all__ = [
     "BBox",
     "BBoxList",
     "Constraint",
+    "ConstraintSet",
+    "ConstraintFilter",
+
     "Aligner",
     "FFTAligner",
+    "PCCAligner",
     "FeatureAligner",
 
     "Merger",
@@ -70,4 +74,20 @@ __all__ = [
     "MaskMerger",
     "LastMerger",
     "EfficientNearestMerger",
+
+    "Solver",
+    "LinearSolver",
+    "OptimalSolver",
+    "OutlierSolver",
+    "MAESolver",
+    "SpanningTreeSolver",
+    "LPSolver",
+    "MAESolver",
+	"HuberSolver",
+
+    "SimpleOffsetModel",
+    "GlobalStageModel",
+
+    "save",
+    "load",
 ]
