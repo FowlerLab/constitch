@@ -159,6 +159,26 @@ class BBox:
     def copy(self):
         return BBox(self._position.copy(), self._size.copy())
 
+    def intersection(self, other):
+        """ Returns the overlapping area between this box and the BBox other passed in
+        This may return boxes with negative size, which would indicate there is no overlap
+        """
+
+        return BBox(
+            point1=np.maximum(self.point1, other.point1),
+            point2=np.minimum(self.point2, other.point2),
+        )
+
+    def area(self):
+        """ Returns the area of the box, basically self.size.prod()
+        However if the size of the rectangle is negative in either or both
+        dimentions the result will be negative, indicating an invalid rectangle
+        """
+        if np.all(self.size < 0):
+            return -self.size.prod()
+        return self.size.prod()
+
+
 
 class BBoxList:
     """ A list of image bounding boxes, countained in a ConstraintImage.
@@ -1293,7 +1313,7 @@ class CompositeImage:
             return full_image, mask
         return full_image
 
-    def plot_scores(self, path, constraints=None, score_func=None, axis_size=12):
+    def plot_scores(self, path, constraints=None, score_func=None, axis_size=12, constraint_multiplier=1):
         import matplotlib.pyplot as plt
         import matplotlib.patches
 
@@ -1355,7 +1375,8 @@ class CompositeImage:
                 score = constraint.score if score_func is None else score_func(constraint)
                 colors.append(score)
                 sizes.append(50 if constraint.modeled else 200)
-                axis.arrow(pos[1] - constraint.dy/2, -pos[0] + constraint.dx/2, constraint.dy/1, -constraint.dx/1,
+                axis.arrow(pos[1] - constraint.dy/2 * constraint_multiplier, -pos[0] + constraint.dx/2 * constraint_multiplier,
+                        constraint.dy/1 * constraint_multiplier, -constraint.dx/1 * constraint_multiplier,
                         width=5, head_width=10, length_includes_head=True, color='black')
                 #axis.plot((pos1[0], pos2[0]), (pos1[1], pos2[1]), linewidth=1, color='red' if constraint.modeled else 'black')
             poses = np.array(poses)

@@ -8,6 +8,49 @@ import scipy.optimize
 
 from .constraints import Constraint
 
+
+def calc_box_score(scores, boxes, overlapping_indices, box, index):
+    area = box.area()
+    overlapping_indices.append(index)
+
+    for i in range(len(scores)):
+        intersection = box.intersection(boxes[i])
+        intersection_area = intersection.area()
+        if intersection_area <= 0:
+            continue
+
+        if i != index:
+            area -= intersection_area
+
+        if i > index:
+            calc_box_score(scores, boxes, overlapping_indices, intersection, i)
+
+    for i in overlapping_indices:
+        scores[i] += area / len(overlapping_indices)
+
+    overlapping_indices.pop(-1)
+
+def constraint_scores(constraints, index):
+    indices = []
+    scores = []
+    boxes = []
+
+    for const in constraints.filter(index2=index):
+        indices.append(const.index1)
+        scores.append(0)
+        boxes.append(const.intersection())
+
+    for const in constraints.filter(index1=index):
+        indices.append(const.index2)
+        scores.append(0)
+        boxes.append(const.intersection())
+
+    for i in range(len(indices)):
+        calc_box_score(scores, boxes, [], boxes[i], i)
+
+    return dict(zip(indices, scores))
+
+
 class Solver:
     """ Base class that takes in all the constraints of a composite
     and solves them into global positions

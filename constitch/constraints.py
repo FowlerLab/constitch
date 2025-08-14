@@ -798,7 +798,7 @@ class ConstraintSet:
         if outliers:
             model = sklearn.linear_model.RANSACRegressor(model,
                     min_samples=4,
-                    max_trials=1000,
+                    max_trials=10000,
                     random_state=random_state)
 
         est_poses = []
@@ -849,7 +849,7 @@ class ConstraintSet:
 
         return aligner
 
-    def solve(self, solver='mse', **kwargs):
+    def solve(self, solver='mae', **kwargs):
         """ Solve the constraints to get a global position for each image
 
         Args:
@@ -881,6 +881,8 @@ class ConstraintSet:
                 solver = solving.MAESolver
             elif solver == 'huber':
                 solver = solving.HuberSolver
+            elif solver == 'spanning tree' or solver == 'spanning_tree':
+                solver = solving.SpanningTreeSolver
 
         if not isinstance(solver, solving.Solver):
             if callable(solver):
