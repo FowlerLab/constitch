@@ -330,4 +330,3 @@ def lfsr(value, bounds):
         if value <= bounds:
             return value
 
->>>>>>> newconstraints
