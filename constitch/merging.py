@@ -179,15 +179,16 @@ class MaskMerger(NearestMerger):
     masks and combining masks that are mostly overlapping in both images. The amount
     of overlap needed to combine masks is the overlap_threshold.
     """
-    def __init__(self, overlap_threshold=0.75):
+    def __init__(self, overlap_threshold=0.75, dtype=np.uint32):
         self.overlap_threshold = overlap_threshold
+        self.dtype = dtype
 
     def create_image(self, image_shape, image_dtype):
-        super().create_image(image_shape, int)
+        super().create_image(image_shape, self.dtype)
 
     def add_image(self, image, location):
         #print ("Adding image", location, file=sys.stderr)
-        image = image.astype(int)
+        image = image.astype(self.dtype)
 
         #nextlabel = 1
         #while nextlabel in self.image:
