@@ -659,6 +659,7 @@ class CompositeImage:
             n_dims = len(boxes[0].position)
         else:
             positions = np.asarray(positions)
+            assert positions.ndim == 2, "Expected a 2d array for positions"
             n_dims = positions.shape[1]
         #assert len(self.imageshape(images[0])) == 2, "Only 2d images are supported"
 
