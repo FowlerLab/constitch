@@ -12,7 +12,6 @@ import skimage.filters
 import sklearn.linear_model
 import concurrent.futures
 import sklearn.mixture
-import imageio.v3 as iio
 import warnings
 
 from .alignment import calculate_offset, score_offset

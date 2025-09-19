@@ -1,6 +1,6 @@
 # ConStitch - A microscopy stitching library made for complex imaging experiments
 
-Constitch performs robust, high quality stitching of microscopy images. It is
+ConStitch performs robust, high quality stitching of microscopy images. It is
 specifically designed to stitch and align microscopy image sets with multiple
 rounds of imaging, where each round needs to be aligned to each other as well
 as stitched together.
@@ -9,9 +9,18 @@ Also see ASHLAR (<github.com/labsyspharm/ashlar>) for another package built to
 stitch multi-cycle image sets, which also heavily inspired the design of this
 package.
 
+## Installation
+
+ConStitch can be installed by cloning the repository, then installing with pip.
+
+	git clone https://github.com/FowlerLab/constitch
+	cd constitch
+	pip3 install ./
+
 ## Usage
 
-Example scripts are provided in examples/ that can help you get started.
+Example scripts are provided in examples/ that can help you get started. More
+examples are coming, as well as an example dataset that can be downloaded and run easily.
 Additionally an example of a snakemake pipeline using constitch for stitching
 is available at <github.com/FowlerLab/starcall-workflow>.
 
@@ -27,7 +36,7 @@ A simple example of stitching a single cycle of imaging consists of these steps:
 
 	# create composite image
 	composite = constitch.CompositeImage()
-	composite.add_images(images, positions, scale='tile)
+	composite.add_images(images, positions, scale='tile')
 
 	# find all overlapping regions between images
 	overlapping = composite.constraints(touching=True)
@@ -37,8 +46,10 @@ A simple example of stitching a single cycle of imaging consists of these steps:
 
 	# filter out erroneous constraints
 	constraints = constraints.filter(min_score=0.5)
+	# train a linear model on remaining constraints
 	stage_model = constraints.fit_model(outliers=True)
 	constraints = stage_model.inliers
+	# and use it to estimate missing constraints
 	modeled = overlapping.calculate(stage_model)
 
 	# solve for global positions of each tile
@@ -63,9 +74,6 @@ for more information.
 
 This example goes through the different steps needed to stitch a 2d grid of images. Each of the functions
 used has reference documentation available at <fowlerlab.github.io/starcall-docs/constitch.html>
-
-## Algorithm
-
 
 
 

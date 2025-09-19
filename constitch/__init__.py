@@ -1,39 +1,79 @@
-"""
-ConStitch: A stitching library that solves the global alignment of images using
-a graph of pairwise constraints between images.
+""" ConStitch - A microscopy stitching library made for complex imaging experiments
 
-Stitching is a vital step in the fisseq pipeline, as it is in any microscopy
-data pipeline, however fisseq has some requirements that make stitching even
-more important than in other experimental procedures. This is mainly because
-the features we need to detect in cells are quite small, and they need to line
-up with each other between cycles in order to detect and read them. To
-accomplish this, the stitching package is basically a full stitching library,
-capable of stitching any group of images into one contiguous image or
-stack of images.
+ConStitch performs robust, high quality stitching of microscopy images. It is
+specifically designed to stitch and align microscopy image sets with multiple
+rounds of imaging, where each round needs to be aligned to each other as well
+as stitched together.
 
-This stitching library is based on building up a collection of pairwise
-offsets between images, represented by the Constraint class. Using
-different algorithms these constraints can be calculated between all
-overlapping images, then filtered and processed to improve the accuracy.
-Finally, we can consider all constraints and globally solve the positions
-of all the images.
+Also see ASHLAR (<github.com/labsyspharm/ashlar>) for another package built to
+stitch multi-cycle image sets, which also heavily inspired the design of this
+package.
 
-The library is meant to be simple to use for simple use cases, but allow for customization
-and fine tuning when you need more control. The whole stitching process is contained in the
-CompositeImage class, and the simplest working example is shown below,
-it stitches together the provided images and creates a full composite image of them combined
-together:
+## Installation
 
-    composite = constitch.CompositeImage(images, positions)
-    constrants = composite.constraints(touching=True).calculate().filter(min_score=0.5)
-	composite.setpositions(constraints.solve())
-    full_image = composite.stitch()
+ConStitch can be installed by cloning the repository, then installing with pip.
 
-This will work with most smaller stitching problems, where images is a list of the images
-in the form of numpy arrays, and positions is a numpy array of initial positions for each
-image. A more in depth run through of the stitching process can be found in the
-documentation of the CompositeImage.
+	git clone https://github.com/FowlerLab/constitch
+	cd constitch
+	pip3 install ./
 
+## Usage
+
+Example scripts are provided in examples/ that can help you get started. More
+examples are coming, as well as an example dataset that can be downloaded and run easily.
+Additionally an example of a snakemake pipeline using constitch for stitching
+is available at <github.com/FowlerLab/starcall-workflow>.
+
+A simple example of stitching a single cycle of imaging consists of these steps:
+
+	import constitch
+	import numpy as np
+	import tifffile
+
+	# load in images and tile positions
+	images = tifffile.imread('images.tif')
+	positions = np.loadtxt('tile_positions.csv', delimiter=',', dtype=int)
+
+	# create composite image
+	composite = constitch.CompositeImage()
+	composite.add_images(images, positions, scale='tile')
+
+	# find all overlapping regions between images
+	overlapping = composite.constraints(touching=True)
+
+	# align each image pair
+	constraints = overlapping.calculate()
+
+	# filter out erroneous constraints
+	constraints = constraints.filter(min_score=0.5)
+	# train a linear model on remaining constraints
+	stage_model = constraints.fit_model(outliers=True)
+	constraints = stage_model.inliers
+	# and use it to estimate missing constraints
+	modeled = overlapping.calculate(stage_model)
+
+	# solve for global positions of each tile
+	solution = modeled.merge(constraints).solve()
+	composite.setpositions(solution)
+
+	# (optional) plot locations of tiles to ensure correct stitching
+	composite.plot_scores('plot.png', constraints)
+
+	# stitch images together
+	full_image = composite.stitch()
+
+	tifffile.write('stitched.tif', full_image)
+
+In this example it is assumed all the images being stitched are saved in the file images.tif of shape (num_images, width, height).
+The positions of each image are stored in 'positions.csv', as the (row, col) position of each tile in the grid. You can
+load in your data however you are able to, as long as your images are in the form of a numpy array of
+shape (num_images, width, height), and you have positions for each image as a numpy array of shape (num_images, 2).
+If your images don't follow a regular grid or you have more exact image positions, you can specify them
+as pixel values, see the documentation for the function [CompositeImage.add_images](https://fowlerlab.github.io/starcall-docs/constitch.composite.html#CompositeImage-add_images)
+for more information.
+
+This example goes through the different steps needed to stitch a 2d grid of images. Each of the functions
+used has reference documentation available at <fowlerlab.github.io/starcall-docs/constitch.html>
 """
 
 from .composite import CompositeImage, BBox, BBoxList
