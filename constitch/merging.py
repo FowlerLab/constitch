@@ -37,6 +37,13 @@ class Merger:
         """
         pass
 
+    def allow_multithreading(self):
+        """ When stitching, multiple non-overlapping tiles may be added at the same time,
+        to improve stitching speed with multithreading.
+        To disable this return False here
+        """
+        return True
+
 
 class LastMerger(Merger):
     """ This is the simplest merger, overlap is decided just by which image was added last.
@@ -169,6 +176,73 @@ class EfficientNearestMerger(Merger):
         return self.image, self.dists != 0
 
 
+class CropMerger(NearestMerger):
+    """ This merger crops tiles in a way to estimate NearestMerger, where the edges of
+    each tile are cropped.
+    """
+    def create_image(self, image_shape, image_dtype):
+        self.image = np.zeros(image_shape, image_dtype)
+        self.boxes = []
+
+    def add_image(self, image, location):
+        from .composite import BBox # Fix imports
+        image_box = BBox(point1=[location[0].start, location[1].start], point2=[location[0].stop, location[1].stop])
+
+        # holds the area that is not written to in self.image
+        empty_boxes = [image_box]
+        for otherbox in self.boxes:
+            # For each other box that has been written to, remove that section
+            # from the area that is empty
+            # This means the boxes in empty_boxes are split up to represent the
+            # empty area
+            if not otherbox.overlaps(image_box):
+                continue
+
+            new_boxes = []
+            for sub_image_box in empty_boxes:
+                if not sub_image_box.overlaps(otherbox):
+                    new_boxes.append(sub_image_box)
+                if otherbox.contains(sub_image_box):
+                    continue
+
+                removed_box = sub_image_box.intersection(otherbox)
+
+                # 4 new boxes are needed to remove removed_box from sub_image_box:
+                # +==================+
+                # | 1         | 3    |
+                # |----+======+      |
+                # | 2  |      |      |
+                # |    +======+------|
+                # |    | 4           |
+                # +==================+
+                to_add = [
+                    BBox(point1=[sub_image_box.point1[0], sub_image_box.point1[1]], point2=[removed_box.point1[0], removed_box.point2[1]]),
+                    BBox(point1=[removed_box.point1[0], sub_image_box.point1[1]], point2=[sub_image_box.point2[0], removed_box.point1[1]]),
+                    BBox(point1=[sub_image_box.point1[0], removed_box.point2[1]], point2=[removed_box.point2[0], sub_image_box.point2[1]]),
+                    BBox(point1=[removed_box.point2[0], removed_box.point1[1]], point2=[sub_image_box.point2[0], sub_image_box.point2[1]]),
+                ]
+                new_boxes.extend(box for box in to_add if box.area() > 0)
+
+            empty_boxes = new_boxes
+
+        full_box = BBox(
+            point1 = np.min([box.point1 for box in empty_boxes], axis=0),
+            point2 = np.min([box.point2 for box in empty_boxes], axis=0),
+        )
+
+        expanded_box = BBox(
+            point1 = image_box.point1 + (full_box.point1 - image_box.point1) // 2,
+            point2 = image_box.point2 - (image_box.point2 - full_box.point2) // 2,
+        )
+
+        x1, y1 = expanded_box.point1 - image_box.point1
+        x2, y2 = expanded_box.point2 - image_box.point1
+        section = image[x1:x2,y1:y2]
+        x1, y1 = expanded_box.point1
+        x2, y2 = expanded_box.point2
+        self.image[x1:x2,y1:y2] = section
+
+        self.boxes.append(expanded_box)
 
 
 class MaskMerger(NearestMerger):

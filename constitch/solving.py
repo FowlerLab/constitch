@@ -6,7 +6,7 @@ import sklearn.linear_model
 import skimage.io
 import scipy.optimize
 
-from .constraints import Constraint
+from .constraints import Constraint, ConstraintSet
 
 
 def calc_box_score(scores, boxes, overlapping_indices, box, index):
@@ -104,32 +104,62 @@ class LinearSolver(Solver):
         return dict(zip(sorted(list(initial_poses.keys())), poses))
 
     def solve(self, constraints, initial_poses):
+        orig_constraints = constraints.copy()
         #image_indices = sorted(list(set(pair[0] for pair in constraints) | set(pair[1] for pair in constraints)))
-        solution_mat, solution_vals, initial_values = self.make_constraint_matrix(constraints, initial_poses)
+        for i in range(1):
+            solution_mat, solution_vals, initial_values = self.make_constraint_matrix(constraints, initial_poses)
 
-        solution = self.solve_matrix(solution_mat, solution_vals, initial_values)
+            solution = self.solve_matrix(solution_mat, solution_vals, initial_values)
 
-        poses = solution.reshape(-1,2)
+            poses = solution.reshape(-1,2)
 
-        residuals = np.matmul(solution_mat, solution) - solution_vals
-        residuals = residuals.reshape(-1,2)
-        self.constraints_accuracy = dict(zip(constraints.keys(), residuals))
+            residuals = np.matmul(solution_mat, solution) - solution_vals
+            residuals = residuals.reshape(-1,2)
+            print (np.mean(np.abs(residuals)), file=sys.stderr)
+            self.constraints_accuracy = dict(zip(constraints.keys(), residuals))
+
+            newconsts = {}
+            for i, pair in enumerate(constraints.keys()):
+                const = constraints[pair]
+                offset = poses[pair[1]] - poses[pair[0]]
+                #offset = np.round(offset).astype(int)
+                newconst = Constraint(const.composite, pair[0], pair[1], offset[0], offset[1], const.score, const.error)
+                newconsts[pair] = newconst
+
+            constraints = newconsts
 
         # find offset that minimizes error from rounding
-        for i in range(2):
-            break
-            frac_part = np.mod(poses[:,i], 1)
-            frac_mean = (np.sum(np.sin(frac_part * 2 * np.pi)), np.sum(np.cos(frac_part * 2 * np.pi)))
-            if frac_mean != (0,0):
-                print ('frac_mean', frac_mean, file=sys.stderr)
-                frac_mean = np.arctan2(*frac_mean) / (2 * np.pi)
-                print (frac_mean, file=sys.stderr)
-                poses[:,i] -= frac_mean
+        #for i in range(2):
+            #frac_part = np.mod(poses[:,i], 1)
+            #frac_mean = (np.sum(np.sin(frac_part * 2 * np.pi)), np.sum(np.cos(frac_part * 2 * np.pi)))
+            #if frac_mean != (0,0):
+                #print ('frac_mean', frac_mean, file=sys.stderr)
+                #frac_mean = np.arctan2(*frac_mean) / (2 * np.pi)
+                #print (frac_mean, file=sys.stderr)
+                #poses[:,i] -= frac_mean
 
         poses = np.round(poses).astype(int)
         poses -= poses.min(axis=0).reshape(1,2)
 
+        residuals = np.matmul(solution_mat, poses.reshape(-1)) - solution_vals
+        residuals = residuals.reshape(-1,2)
+        print ('after round', np.mean(np.abs(residuals)), file=sys.stderr)
+
         return self.make_positions(initial_poses, poses)
+
+        rounded_poses = SpanningTreeSolver(score_func=lambda const: const.overlap_ratio).solve(constraints, initial_poses)
+        errors = np.array([np.linalg.norm(np.array(rounded_poses[const.index2]) - rounded_poses[const.index1] - (const.dx, const.dy)) for const in constraints.values()])
+        print (np.mean(np.abs(errors)), file=sys.stderr)
+        errors = np.array([np.linalg.norm(np.array(rounded_poses[const.index2]) - rounded_poses[const.index1] - (const.dx, const.dy)) for const in orig_constraints.values()])
+        print (np.mean(np.abs(errors)), file=sys.stderr)
+
+        poses = np.array([rounded_poses[i] for i in initial_poses.keys()])
+        #poses = np.array(list(rounded_poses.values()))
+
+        residuals = np.matmul(solution_mat, poses.reshape(-1)) - solution_vals
+        residuals = residuals.reshape(-1,2)
+        print ('after round', np.mean(np.abs(residuals)), file=sys.stderr)
+        return rounded_poses
 
     def solve_matrix(self, solution_mat, solution_vals, initial_values):
         #solution, residuals, rank, sing = np.linalg.lstsq(solution_mat, solution_vals, rcond=None)
@@ -215,6 +245,7 @@ class LPSolver(LinearSolver):
         print (c.shape, A_eq.shape, b_eq.shape, file=sys.stderr)
 
         if self.integral:
+            """
             result = scipy.optimize.linprog(
                 c=c,
                 A_eq=A_eq,
@@ -227,10 +258,13 @@ class LPSolver(LinearSolver):
             print ('Solved first problem', file=sys.stderr)
             tmp_params = solution[:n_params] - solution[n_params:2*n_params]
             print (np.histogram(np.mod(tmp_params, 1)), file=sys.stderr)
+            """
 
             integrality = np.concatenate([np.ones(2 * n_params), np.zeros(2 * n_indices)])
-            lower_bounds = np.concatenate([np.floor(solution[:2*n_params]), np.zeros(2 * n_indices)])
-            upper_bounds = np.concatenate([np.ceil(solution[:2*n_params]), np.full(2 * n_indices, np.inf)])
+            lower_bounds = np.concatenate([np.zeros(2 * n_params), np.zeros(2 * n_indices)])
+            upper_bounds = np.concatenate([np.full(2 * n_params, np.inf), np.full(2 * n_indices, np.inf)])
+            #lower_bounds = np.concatenate([np.floor(solution[:2*n_params]), np.zeros(2 * n_indices)])
+            #upper_bounds = np.concatenate([np.ceil(solution[:2*n_params]), np.full(2 * n_indices, np.inf)])
             print ('bounds', lower_bounds, upper_bounds, file=sys.stderr)
 
             result = scipy.optimize.milp(
@@ -258,6 +292,70 @@ class LPSolver(LinearSolver):
         print (np.histogram(np.mod(solution, 1)), file=sys.stderr)
 
         return solution
+
+class PULPSolver(Solver):
+    """ Solver that uses the pulp library to solve a integer programming problem
+    representing the set of constraints.
+    """
+    def __init__(self):
+        pass
+
+    def solve(self, constraints, initial_poses):
+        import pulp
+
+        prob = pulp.LpProblem("Constraint set problem", pulp.LpMinimize)
+
+        xposes, yposes = {}, {}
+        anchored_index = None
+        for i in initial_poses.keys():
+            if anchored_index is None:
+                anchored_index = i
+                continue
+            xposes[i] = pulp.LpVariable('xpos{}'.format(i), None, None, pulp.LpInteger)
+            yposes[i] = pulp.LpVariable('ypos{}'.format(i), None, None, pulp.LpInteger)
+
+        error_terms = []
+        for const in constraints.values():
+            for i in range(4):
+                error_terms.append(pulp.LpVariable('error{}_{}_{}'.format(const.index1, const.index2, i), 0, None))
+
+        prob += pulp.lpSum(error_terms), 'total_alignment_error'
+
+        xposes[anchored_index] = 0
+        yposes[anchored_index] = 0
+        print ('set positions to zero for anchored index', file=sys.stderr)
+
+        for i, const in enumerate(constraints.values()):
+            score = self.score_func(const)
+            error1, error2, error3, error4 = error_terms[i*4:i*4+4]
+            prob += (score * xposes[const.index2] - score * xposes[const.index1] == score * const.dx + error1 - error2,
+                    "constraint_x_{}_{}".format(const.index1, const.index2))
+            prob += (score * yposes[const.index2] - score * yposes[const.index1] == score * const.dy + error3 - error4,
+                    "constraint_y_{}_{}".format(const.index1, const.index2))
+
+        #prob += next(iter(xposes)) == 0, 'anchor_x'
+        #prob += next(iter(yposes)) == 0, 'anchor_y'
+        #print ('added anchors to zero', file=sys.stderr)
+
+        prob.writeLP("constraints.lp")
+        prob.solve(pulp.COIN_CMD(msg=True, threads=32))
+        #prob.solve()
+
+        print (pulp.LpStatus[prob.status], file=sys.stderr)
+
+        for v in prob.variables():
+            print(v.name, "=", v.varValue, file=sys.stderr)
+
+        for i in initial_poses.keys():
+            if i == anchored_index: continue
+            xposes[i] = xposes[i].varValue
+            yposes[i] = yposes[i].varValue
+
+        poses = {i: (xposes[i], yposes[i]) for i in initial_poses.keys()}
+        return poses
+
+    def score_func(self, constraint):
+        return max(0, constraint.score) * max(0, constraint.overlap_ratio)
 
 class HuberSolver(LinearSolver):
     """ Solver that performs quantile regression instead of ordinary least squares
@@ -480,8 +578,10 @@ class SpanningTreeSolver(Solver):
     global positions of all images
     """
 
-    def __init__(self):
-        pass
+    def __init__(self, score_func=None):
+        self.score_func = score_func
+        if score_func is None:
+            self.score_func = lambda const: const.score
 
     def solve(self, constraints, initial_poses):
         """ Constructs a maximum spanning tree with Kruskals algorithm
@@ -507,7 +607,7 @@ class SpanningTreeSolver(Solver):
 
         spanning_tree = {}
 
-        for constraint in sorted(constraints.values(), key=lambda const: -const.score):
+        for constraint in sorted(constraints.values(), key=self.score_func, reverse=True):
             i, j = constraint.pair
             i, j = find(i), find(j)
             if i != j:
@@ -517,18 +617,27 @@ class SpanningTreeSolver(Solver):
 
         final_poses = {}
 
+        consts = ConstraintSet()
         def propagate(i, last_i, pos):
             final_poses[i] = pos
             for child, constraint in spanning_tree[i].items():
                 if child != last_i:
                     if constraint.index1 == i:
-                        newpos = pos[0] + constraint.dx, pos[1] + constraint.dy
+                        newpos = pos[0] + round(constraint.dx), pos[1] + round(constraint.dy)
                     else:
-                        newpos = pos[0] - constraint.dx, pos[1] - constraint.dy
-                    print (i, child, constraint, pos, pos[0] + constraint.dx, pos[1] + constraint.dy, file=sys.stderr)
+                        newpos = pos[0] - round(constraint.dx), pos[1] - round(constraint.dy)
+                    #print (i, child, constraint, pos, pos[0] + constraint.dx, pos[1] + constraint.dy, file=sys.stderr)
+                    consts.add(constraint)
+                    print (constraint, file=sys.stderr)
+                    print (constraint.composite, file=sys.stderr)
                     propagate(child, i, newpos)
 
         propagate(next(iter(initial_poses.keys())), -1, (0,0))
+
+        print (consts, file=sys.stderr)
+        print (len(consts), file=sys.stderr)
+        print (consts.composite, file=sys.stderr)
+        consts.composite.plot_scores('spantree_scores.png', consts)
 
         assert set(final_poses.keys()) == set(initial_poses.keys())
 

@@ -1182,7 +1182,7 @@ class CompositeImage:
         return solution2
 
     def stitch(self, merger='mean', indices=None, real_images=None, out=None, bg_value=None, return_bg_mask=False,
-            mins=None, maxes=None, keep_zero=False):
+            mins=None, maxes=None, keep_zero=False, use_executor=True, prevent_resize=False, **kwargs):
         """ Combines images in the composite into a single image
             
             merger: str or merging.Merger instance
@@ -1212,7 +1212,17 @@ class CompositeImage:
             keep_zero: bool
                 Whether or not to keep the origin in the result. If true this could
                 result in extra blank space, which might be necessary when lining up
-                multiple images.
+                multiple images. Similar to mins=[0,0], except if image positions
+                are negative they wont be cropped out
+
+            use_executor: bool, default True
+                Whether or not to use self.executor when adding tiles, which can allow
+                for multithreading. If true, multiple non overlapping tiles are added at once,
+                to speed up stitching. Multithreading may be disabled by the Merger class
+                being used, see merging.Merger for more info
+
+            prevent_resize: bool, default False
+                If true an error is raised when an image would be resized
 
             Returns: np.ndarray
                 image stitched together
@@ -1231,7 +1241,7 @@ class CompositeImage:
             elif merger == 'nearest':
                 merger = merging.NearestMerger
             elif merger == 'efficient_nearest':
-                merger = merging.EfficientNearestMerger,
+                merger = merging.EfficientNearestMerger
 
         if not isinstance(merger, merging.Merger):
             if callable(merger):
@@ -1284,6 +1294,8 @@ class CompositeImage:
             image = real_images[i]
 
             if np.any(pos2 - pos1 != image.shape[:2]):
+                if prevent_resize:
+                    raise ValueError('Resizing images when stitching, with prevent_resize=True')
                 warnings.warn("resizing some images")
                 image = skimage.transform.resize(image, pos2 - pos1, preserve_range=True).astype(image.dtype)
             
@@ -1352,14 +1364,18 @@ class CompositeImage:
         #axis_size = 12
         grid_size = math.ceil(np.sqrt(len(groups)))
         fig, axes = plt.subplots(nrows=grid_size, ncols=grid_size, figsize=(axis_size*grid_size,axis_size*grid_size), squeeze=False, sharex=True, sharey=True)
+        tmp_lines = None
 
         for indices, const_pairs, axis, name in zip(groups, const_groups, axes.flatten(), names):
+            print (len(indices))
 
             for i,index in enumerate(indices):
                 x, y = self.boxes[index].position[:2]
                 width, height = self.boxes[index].size[:2]
                 axis.text(y + height / 2, -x - width / 2, "{}\n({})".format(index, i), horizontalalignment='center', verticalalignment='center')
                 axis.add_patch(matplotlib.patches.Rectangle((y, -x - width), height, width, edgecolor='grey', facecolor='none'))
+                if tmp_lines is None:
+                    tmp_lines = axes[-1,-1].plot([x,x+1], [y, y+1])
 
             poses = []
             colors = []
@@ -1391,6 +1407,11 @@ class CompositeImage:
             axis.xaxis.set_tick_params(labelbottom=True)
             axis.yaxis.set_tick_params(labelbottom=True)
 
+        if tmp_lines is not None:
+            for line in tmp_lines:
+                line.remove()
+
+        fig.tight_layout()
         fig.savefig(path)
 
     def html_summary(self, path, score_func=None):

@@ -879,6 +879,14 @@ class ConstraintSet:
                 solver = solving.LinearSolver
             elif solver == 'mae':
                 solver = solving.MAESolver
+            elif solver == 'lp':
+                solver = solving.LPSolver
+                kwargs['integral'] = False
+            elif solver == 'ilp':
+                solver = solving.LPSolver
+                kwargs['integral'] = True
+            elif solver == 'pulp':
+                solver = solving.PULPSolver()
             elif solver == 'huber':
                 solver = solving.HuberSolver
             elif solver == 'spanning tree' or solver == 'spanning_tree':
