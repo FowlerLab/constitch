@@ -297,13 +297,14 @@ class PULPSolver(Solver):
     """ Solver that uses the pulp library to solve a integer programming problem
     representing the set of constraints.
     """
-    def __init__(self):
-        pass
+    def __init__(self, integral=True, threads=None):
+        self.integral = integral
+        self.threads = threads
 
     def solve(self, constraints, initial_poses):
         import pulp
 
-        prob = pulp.LpProblem("Constraint set problem", pulp.LpMinimize)
+        prob = pulp.LpProblem("Constraint_set_problem", pulp.LpMinimize)
 
         xposes, yposes = {}, {}
         anchored_index = None
@@ -311,8 +312,12 @@ class PULPSolver(Solver):
             if anchored_index is None:
                 anchored_index = i
                 continue
-            xposes[i] = pulp.LpVariable('xpos{}'.format(i), None, None, pulp.LpInteger)
-            yposes[i] = pulp.LpVariable('ypos{}'.format(i), None, None, pulp.LpInteger)
+            if self.integral:
+                xposes[i] = pulp.LpVariable('xpos{}'.format(i), None, None, pulp.LpInteger)
+                yposes[i] = pulp.LpVariable('ypos{}'.format(i), None, None, pulp.LpInteger)
+            else:
+                xposes[i] = pulp.LpVariable('xpos{}'.format(i), None, None)
+                yposes[i] = pulp.LpVariable('ypos{}'.format(i), None, None)
 
         error_terms = []
         for const in constraints.values():
@@ -338,8 +343,10 @@ class PULPSolver(Solver):
         #print ('added anchors to zero', file=sys.stderr)
 
         prob.writeLP("constraints.lp")
-        prob.solve(pulp.COIN_CMD(msg=True, threads=32))
-        #prob.solve()
+        if self.threads:
+            prob.solve(pulp.COIN_CMD(msg=True, threads=self.threads))
+        else:
+            prob.solve()
 
         print (pulp.LpStatus[prob.status], file=sys.stderr)
 
@@ -348,8 +355,8 @@ class PULPSolver(Solver):
 
         for i in initial_poses.keys():
             if i == anchored_index: continue
-            xposes[i] = xposes[i].varValue
-            yposes[i] = yposes[i].varValue
+            xposes[i] = round(xposes[i].varValue)
+            yposes[i] = round(yposes[i].varValue)
 
         poses = {i: (xposes[i], yposes[i]) for i in initial_poses.keys()}
         return poses

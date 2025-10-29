@@ -1285,34 +1285,56 @@ class CompositeImage:
                 "Provided output image does not match expected shape or dtype: {} {}".format(merger.image.shape, merger.image.dtype))
             merger.image = out
 
-        import matplotlib.pyplot as plt
-        fig, axis = plt.subplots()
+        #import matplotlib.pyplot as plt
+        #fig, axis = plt.subplots()
+        indices_left = indices
+        while len(indices_left):
+            indices_skipped = []
+            cur_boxes = []
+            futures = []
 
-        for i in indices:
-            pos1 = ((self.boxes[i].point1[:2] - mins) * self.scale).astype(int)
-            pos2 = ((self.boxes[i].point2[:2] - mins) * self.scale).astype(int)
-            image = real_images[i]
+            for i in indices_left:
+                curbox = self.boxes[i].as2d()
+                #self.debug (cur_boxes)
+                #self.debug ([box.overlaps(curbox) for box in cur_boxes])
+                if any(box.overlaps(curbox) for box in cur_boxes):
+                    indices_skipped.append(i)
+                    continue
 
-            if np.any(pos2 - pos1 != image.shape[:2]):
-                if prevent_resize:
-                    raise ValueError('Resizing images when stitching, with prevent_resize=True')
-                warnings.warn("resizing some images")
-                image = skimage.transform.resize(image, pos2 - pos1, preserve_range=True).astype(image.dtype)
-            
-            image = image[max(0,-pos1[0]):,max(0,-pos1[1]):]
+                cur_boxes.append(curbox)
 
-            pos1 = np.maximum(0, np.minimum(pos1, maxes - mins))
-            pos2 = np.maximum(0, np.minimum(pos2, maxes - mins))
+        #for i in indices:
+                pos1 = ((self.boxes[i].point1[:2] - mins) * self.scale).astype(int)
+                pos2 = ((self.boxes[i].point2[:2] - mins) * self.scale).astype(int)
+                image = real_images[i]
 
-            image = image[:pos2[0]-pos1[0],:pos2[1]-pos1[1]]
+                if np.any(pos2 - pos1 != image.shape[:2]):
+                    if prevent_resize:
+                        raise ValueError('Resizing images when stitching, with prevent_resize=True')
+                    warnings.warn("resizing some images")
+                    image = skimage.transform.resize(image, pos2 - pos1, preserve_range=True).astype(image.dtype)
+                
+                image = image[max(0,-pos1[0]):,max(0,-pos1[1]):]
 
-            if image.size == 0: continue
+                pos1 = np.maximum(0, np.minimum(pos1, maxes - mins))
+                pos2 = np.maximum(0, np.minimum(pos2, maxes - mins))
 
-            x1, y1 = pos1
-            x2, y2 = pos2
-            axis.plot([x1, x1, x2, x2, x1], [y1, y2, y2, y1, y1])
-            position = (slice(pos1[0], pos2[0]), slice(pos1[1], pos2[1]))
-            merger.add_image(image, position)
+                image = image[:pos2[0]-pos1[0],:pos2[1]-pos1[1]]
+
+                if image.size == 0: continue
+
+                x1, y1 = pos1
+                x2, y2 = pos2
+                #axis.plot([x1, x1, x2, x2, x1], [y1, y2, y2, y1, y1])
+                position = (slice(pos1[0], pos2[0]), slice(pos1[1], pos2[1]))
+                #merger.add_image(image, position)
+                future = self.executor.submit(_merge_job, merger, image=image, location=position)
+                futures.append(future)
+
+            self.debug ('Merging', len(futures), 'non overlapping tiles with executor')
+            results = [future.result() for future in futures]
+            self.debug ('  done,', len(indices_skipped), ' remaining')
+            indices_left = indices_skipped
 
         full_image, mask = merger.final_image()
 
@@ -1375,7 +1397,7 @@ class CompositeImage:
                 axis.text(y + height / 2, -x - width / 2, "{}\n({})".format(index, i), horizontalalignment='center', verticalalignment='center')
                 axis.add_patch(matplotlib.patches.Rectangle((y, -x - width), height, width, edgecolor='grey', facecolor='none'))
                 if tmp_lines is None:
-                    tmp_lines = axes[-1,-1].plot([x,x+1], [y, y+1])
+                    tmp_lines = axes[-1,-1].plot([y,y+1], [-x, -x+1])
 
             poses = []
             colors = []
@@ -1570,6 +1592,8 @@ class CompositeImage:
         diff = (new_offset[0] - constraint.dx, new_offset[1] - constraint.dy)
         return np.sqrt(diff[0]*diff[0] + diff[1]*diff[1])
 
+def _merge_job(merger, **kwargs):
+    return merger.add_image(**kwargs)
 
 
 class SubCompositeConstraintSet(CompositeConstraintSet):

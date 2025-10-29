@@ -886,11 +886,13 @@ class ConstraintSet:
                 solver = solving.LPSolver
                 kwargs['integral'] = True
             elif solver == 'pulp':
-                solver = solving.PULPSolver()
+                solver = solving.PULPSolver
             elif solver == 'huber':
                 solver = solving.HuberSolver
-            elif solver == 'spanning tree' or solver == 'spanning_tree':
+            elif solver == 'spanning tree' or solver == 'spanning_tree' or solver == 'spantree':
                 solver = solving.SpanningTreeSolver
+            else:
+                raise ValueError('unrecognized solver type: "{}"'.format(solver))
 
         if not isinstance(solver, solving.Solver):
             if callable(solver):
