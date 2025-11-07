@@ -1425,6 +1425,7 @@ class CompositeImage:
                 points = axis.scatter(poses[:,0], poses[:,1], c=colors, s=sizes, alpha=0.5)
                 fig.colorbar(points, ax=axis)
 
+            axis.set_aspect('equal', adjustable='datalim')
             axis.set_title('Scores of constraints ' + name)
             axis.xaxis.set_tick_params(labelbottom=True)
             axis.yaxis.set_tick_params(labelbottom=True)
