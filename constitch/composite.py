@@ -1,4 +1,5 @@
 import sys
+import io
 from fractions import Fraction
 import random
 import time
@@ -13,6 +14,8 @@ import sklearn.linear_model
 import concurrent.futures
 import sklearn.mixture
 import warnings
+import PIL.Image
+import base64
 
 from .alignment import calculate_offset, score_offset
 from .stage_model import SimpleOffsetModel, GlobalStageModel
@@ -546,7 +549,7 @@ class CompositeImage:
 
     def __init__(self, images=None, positions=None, boxes=None, scale='pixel', channel_axis=None,
             grid_size=None, tile_shape=None, overlap=0.1,
-            aligner=None, precalculate=False, debug=True, progress=False, executor=None):
+            debug=True, progress=False, executor=None):
         self.images = []
         self.boxes = BBoxList()
         self.resized_images = {}
@@ -555,10 +558,7 @@ class CompositeImage:
         self.scale = 1
         self.set_logging(debug, progress)
         self.set_executor(executor)
-        self.set_aligner(aligner)
         self.multichannel = False
-
-        self.precalculate = precalculate
 
         if images is not None:
             if grid_size is not None or tile_shape is not None:
@@ -582,9 +582,6 @@ class CompositeImage:
 
     def set_executor(self, executor):
         self.executor = executor or SequentialExecutor()
-
-    def set_aligner(self, aligner, rescore_constraints=False):
-        self.aligner = aligner or alignment.FFTAligner()
 
     def set_logging(self, debug=True, progress=False):
         self.debug, self.progress = utils.log_env(debug, progress)
@@ -1425,7 +1422,7 @@ class CompositeImage:
                 points = axis.scatter(poses[:,0], poses[:,1], c=colors, s=sizes, alpha=0.5)
                 fig.colorbar(points, ax=axis)
 
-            axis.set_aspect('equal', adjustable='datalim')
+            axis.set_aspect('equal', adjustable='box')
             axis.set_title('Scores of constraints ' + name)
             axis.xaxis.set_tick_params(labelbottom=True)
             axis.yaxis.set_tick_params(labelbottom=True)
@@ -1437,7 +1434,325 @@ class CompositeImage:
         fig.tight_layout()
         fig.savefig(path)
 
-    def html_summary(self, path, score_func=None):
+    def html_summary(self, path, constraints=None, include_images=True, image_size=128):
+        with open(path, 'w') as ofile:
+            ofile.write("""<!DOCTYPE html>
+            <html>
+            <head>
+            <meta charset="utf-8">
+            """)
+
+            has_layers = len(self.boxes) and self.boxes[0].position.shape[0] == 3
+
+            def add_image(image, name):
+                #if image.ndim == 2:
+                    #image = np.broadcast_to(image[:,:,None], (image.shape[0], image.shape[1], 3))
+                #image = image[:,:,:3]
+                image = image * 255
+                np.clip(image, 0, 255, out=image)
+                #image = image / np.percentile(image, 99.9) * 255
+                image = image.astype(np.uint8)
+
+                pilimage = PIL.Image.fromarray(image)
+                image_data = io.BytesIO()
+                pilimage.save(image_data, format='jpeg')
+                image_data.seek(0)
+
+                encoded = base64.b64encode(image_data.getvalue()).decode()
+                #ofile.write('<img id="thumbnail{}" src="data:image/jpeg;base64,'.format(i))
+                #ofile.write(encoded)
+                #ofile.write('"></img>')
+                ofile.write('.' + name)
+                ofile.write(' { background-image: url(data:image/jpeg;base64,')
+                ofile.write(encoded)
+                ofile.write('); } ')
+
+            #ofile.write('<div id="thumnails" style="display: none;">')
+            ofile.write('<style>')
+
+            #for i in range(len(self.images)):
+                #downscale_ratio = min(self.images[i].shape[:2]) // thumbnail_size
+                #add_image(self.images[i], 'thumbnail{}'.format(i), downscale_ratio)
+
+            if include_images:
+                image_size = 256
+                thumbnail_size = 64
+
+                downscaled_images = []
+                percentiles = []
+                for image in self.images:
+                    downscale_ratio = min(image.shape[:2]) // image_size
+                    image = skimage.transform.downscale_local_mean(image, downscale_ratio)
+                    #image = image - np.percentile(image, 0.1)
+                    #image = image / np.percentile(image, 99.9)
+                    downscaled_images.append(image)
+                    percentiles.append(np.percentile(image, [1, 99]))
+                percentiles = np.array(percentiles)
+
+                percentile = np.mean(percentiles, axis=0)
+                if has_layers:
+                    percentile_layers = {}
+                    for layer in np.unique(self.boxes.positions[:,2]):
+                        percentile_layers[layer] = np.mean(percentiles[self.boxes.positions[:,2]==layer], axis=0)
+                    self.debug (percentile_layers)
+                #percentile = np.mean(percentiles)
+
+                for i, image in enumerate(downscaled_images):
+                    #add_image(image, 'image{}'.format(i))
+                    image = skimage.transform.downscale_local_mean(image, image_size // thumbnail_size)
+                    if has_layers:
+                        percentile = percentile_layers[self.boxes[i].position[2]]
+                    image -= percentile[0]
+                    image /= percentile[1]
+                    #image = image / percentile
+                    add_image(image, 'thumbnail{}'.format(i))
+
+            ofile.write("""
+            label {
+                white-space: nowrap;
+            }
+            .image {
+                position: absolute;
+                background-size: cover;
+                box-sizing: border-box;
+            }
+            .image:hover {
+                z-index: 1;
+            }
+            .image::after {
+                position: absolute;
+                content: ' ';
+                left: 0;
+                top: 0;
+                width: 100%;
+                height: 100%;
+                border: 1px solid white;
+                z-index: 2;
+                box-sizing: border-box;
+            }
+            .image:hover::after {
+                border: 2px solid white;
+            }
+            .image .details {
+                display: none;
+                position: absolute;
+                color: white;
+                z-index: 3;
+                overflow: clip;
+                user-select: none;
+                left: 3px;
+                top: 3px;
+                right: 3px;
+                bottom: 3px;
+                text-shadow:
+                    -2px -2px black,
+                    -2px 2px black,
+                    2px -2px black,
+                    2px 2px black;
+            }
+            .image:hover .details {
+                display: unset;
+            }
+            .image .constraints {
+                display: none;
+            }
+            .image.selected .constraints {
+                display: unset;
+            }
+            .image.selected {
+                filter: brightness(50%) sepia(100%) saturate(10) hue-rotate(-30deg);
+                z-index: 3;
+            }
+            .image.selected .constraints .image {
+                filter: brightness(50%) sepia(100%) saturate(10) hue-rotate(210deg);
+                opacity: 0.5;
+            }
+            .image.selected .constraints .image:hover {
+                filter: brightness(50%) sepia(100%) saturate(10) hue-rotate(90deg);
+            }
+            .box {
+                border: 1px solid black;
+            }
+            :root {
+                font-size: 0.005px;
+            }
+            body {
+                font-size: 16px;
+                margin: 0;
+            }
+            #plot {
+                position: relative;
+                overflow: clip;
+                width: 100%;
+                height: 100%;
+            }
+            #axes {
+                position: absolute;
+                left: 50%;
+                top: 50%;
+            }
+            #axes-pan {
+                position: absolute;
+                left: 1rem;
+                top: 1rem;
+            }
+            main {
+                display: flex;
+                width: 100vw;
+                height: 100vh;
+            }
+            .images {
+                display: none;
+            }
+            .visible.images {
+                display: unset;
+            }
+            """)
+
+            ofile.write('</style></head><body>')
+            ofile.write("""
+            <script>
+            document.addEventListener('wheel', (event) => {
+                const value = Number(window.getComputedStyle(document.documentElement).getPropertyValue('font-size').slice(0, -2))
+                if (event.deltaY < 0) {
+                    document.documentElement.style.fontSize = (value * 1.1) + 'px'
+                } else {
+                    document.documentElement.style.fontSize = (value * 0.9) + 'px'
+                }
+            })
+            var isClick = false;
+            document.addEventListener('mousemove', (event) => {
+                isClick = false
+                if (event.buttons != 0) {
+                    const pixel_scale = Number(window.getComputedStyle(document.documentElement).getPropertyValue('font-size').slice(0, -2))
+                    const axes = document.getElementById('axes-pan');
+                    const x = Number(axes.style.top.slice(0, -3));
+                    const y = Number(axes.style.left.slice(0, -3))
+                    axes.style.top = (x + event.movementY / pixel_scale) + 'rem';
+                    axes.style.left = (y + event.movementX / pixel_scale) + 'rem';
+                }
+            })
+            document.addEventListener('mousedown', (event) => {
+                isClick = true;
+            })
+            document.addEventListener('click', (event) => {
+                if (isClick && event.target.classList.contains('image')) {
+                    select(event.target)
+                }
+            })
+            document.addEventListener('keydown', (event) => {
+                if (event.key == 'g') {
+                    const axes = document.getElementById('axes-pan');
+                    axes.style.top = '1rem';
+                    axes.style.left = '1rem';
+                    document.documentElement.style.fontSize = '0.005px';
+                }
+            })
+
+            function update() {
+                let i = 0;
+                selected = [];
+                for (const checkbox of document.querySelectorAll('input')) {
+                    const imagegroup = document.getElementById('imagegroup' + i).querySelector('.images')
+                    if (checkbox.checked) {
+                        selected.push(i);
+                        imagegroup.classList.add('visible');
+                        imagegroup.style.opacity = 1 / selected.length;
+                    } else {
+                        imagegroup.classList.remove('visible');
+                    }
+                    imagegroup.style.filter = 'unset';
+                    i += 1
+                }
+                if (selected.length > 1) {
+                    for (let i = 0; i < selected.length; i ++) {
+                        const imagegroup = document.getElementById('imagegroup' + selected[i]).querySelector('.images')
+                        imagegroup.style.filter = 'brightness(50%) sepia(100%) saturate(10) hue-rotate(' + (i / selected.length * 360 - 30) + 'deg)'
+                    }
+                }
+            }
+
+            function select(elem) {
+                const index = elem.dataset.index;
+
+                const constraints = JSON.parse(document.getElementById('constraints-image' + index).innerText);
+            }
+            </script>
+            """)
+
+            ofile.write('<main>')
+
+            groups = list(range(len(self.images)))
+
+            if has_layers:
+                ofile.write('<nav><ul>')
+
+                groups = []
+                for i, layer in enumerate(np.unique(self.boxes.positions[:,2])):
+                    self.debug ('layer', i, layer)
+                    groups.append(np.argwhere(self.boxes.positions[:,2] == layer).reshape(-1))
+                    onchange = "document.getElementById('imagegroup{}').style.display = this.checked ? 'unset' : 'none';".format(i)
+                    ofile.write('<li><label><input type="radio" name="layer" value="{}" {} onchange="update()">Layer&nbsp;{}</label></li>'.format(
+                            i, 'checked' if i == 0 else '', layer))
+
+                ofile.write('</ul></nav>')
+
+            ofile.write('<div id="plot"><div id="axes"><div id="axes-pan">')
+
+            positions = self.boxes.positions - self.boxes.positions.mean(axis=0)[None,:].astype(int)
+
+            for i, group in enumerate(groups):
+                self.debug ('writing boxes', i, group)
+                ofile.write('<div id="imagegroup{}"><div class="images">'.format(i))
+
+                for group_index, i in enumerate(group):
+                    ofile.write('<div class="image thumbnail{}" style="top: {}rem; left: {}rem; height: {}rem; width: {}rem" data-index="{}">'.format(
+                            i, positions[i,0], positions[i,1], self.boxes[i].size[0], self.boxes[i].size[1], i))
+                    ofile.write('<div class="details">#{} (#{})<br>{} {}</div>'.format(
+                            i, group_index, self.boxes[i].position, self.boxes[i].size))
+                    if constraints is not None:
+                        ofile.write('<div class="constraints">')
+                        for const in constraints.filter(index1=i):
+                            j = const.index2
+                            ofile.write('<div class="image thumbnail{}" style="top: {}rem; left: {}rem; height: {}rem; width: {}rem" data-index="{}"></div>'.format(
+                                    j, positions[i,0] + const.dx, positions[i,1] + const.dy,
+                                    self.boxes[j].size[0], self.boxes[j].size[1], j))
+                        for const in constraints.filter(index2=i):
+                            j = const.index1
+                            ofile.write('<div class="image thumbnail{}" style="top: {}rem; left: {}rem; height: {}rem; width: {}rem" data-index="{}"></div>'.format(
+                                    j, positions[i,0] - const.dx, positions[i,1] - const.dy,
+                                    self.boxes[j].size[0], self.boxes[j].size[1], j))
+
+                        ofile.write('</div>')
+                    ofile.write('</div>')
+
+                #ofile.write('</div><div class="boxes">')
+                #for i in group:
+                    #ofile.write('<div class="box" style="top: {}rem; left: {}rem; height: {}rem; width: {}rem"></div>'.format(
+                            #i, self.boxes[i].position[0], self.boxes[i].position[1], self.boxes[i].size[0], self.boxes[i].size[1]))
+                ofile.write('</div></div>')
+
+            ofile.write('</div></div></div>')
+
+            ofile.write('<div id="selected-sidebar"></div>')
+
+            ofile.write('</main>')
+            ofile.write('<script>update()</script>')
+            ofile.write('</body></html>')
+
+
+    def viewer(self, path, constraints=None):
+        import xml.etree.ElementTree as ET
+        html = ET.Element('html')
+
+        head = ET.SubElement(html, 'head')
+        meta = ET.SubElement(head, 'meta', charset='utf-8')
+        meta = ET.SubElement(head, 'style')
+        style.text = """
+        """
+
+
+    def html_summary_old(self, path, score_func=None):
         import xml.etree.ElementTree as ET
         html = ET.Element('html')
 
@@ -1459,7 +1774,7 @@ class CompositeImage:
         """
 
         body = ET.SubElement(html, 'body')
-        
+
         mins, maxes = self.boxes.points1.min(axis=0), self.boxes.points2.max(axis=0)
         svg = ET.SubElement(body, 'svg', viewbox="{} {} {} {}".format(mins[0], mins[1], maxes[0], maxes[1]))
 
@@ -1686,7 +2001,7 @@ class SubCompositeImage(CompositeImage):
     be reflected in the other composite, and vice versa.
     """
 
-    def __init__(self, composite, mapping, layer=None, debug=True, progress=False, executor=None, aligner=None):
+    def __init__(self, composite, mapping, layer=None, debug=True, progress=False, executor=None):
         self.composite = composite
         self.mapping = mapping
 

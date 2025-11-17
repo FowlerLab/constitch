@@ -295,14 +295,54 @@ class Constraint:
         """
         return (self.dx, self.dy) - (self.box2.position[:2] - self.box1.position[:2])
 
-    def calculate(self, aligner=None, executor=None):
+    def calculate(self, aligner='fft', executor=None, **kwargs):
         """ Calculates a new constraint using the specified alignment algorithm.
         More information on how alignment is performed can be found at constitch.alignment
+
+        Args:
+            aligner (constitch.Aligner): default 'fft'
+                The aligner that is used to calculate the new constraints. Can be a
+                class that inherits from constitch.Aligner, an instantiated constitch.Aligner
+                instance, or a string of these options:
+                    'fft': uses constitch.FFTAligner. This uses the phase cross correlation
+                        algorithm to try to find the offset that maximizes the zero-normalized
+                        cross correlation (zncc) of the overlapping region. This is the main aligner
+                        and recommended for nearly all uses.
+                    'padded_fft': uses constitch.PaddedFFTAligner. the same as 'fft', except
+                        both images are padded to double their size. This prevents erroneous constraints
+                        as the phase cross correlation calculates the circular cross correlation.
+                        However, the increased processing needed for images of double size is not
+                        normally worth the improved performance.
+                    'feature': uses constitch.FeatureAligner. this uses feature detection and
+                        matching algorithms to find the offset of the two images. It has not been
+                        tested and is not recommended for use.
+            executor (concurrent.futures.Executor): default self.composite.executor
+                A thread or process pool instance to parallelize the computation,
+                as some aligners can be quite slow
         """
+        from . import alignment
+        if type(aligner) == str:
+            aligner = aligner.lower()
+            if aligner == 'fft':
+                aligner = alignment.FFTAligner
+            elif aligner in ('padded_fft', 'padded-fft', 'padded fft'):
+                aligner = alignment.PaddedFFTAligner
+            elif aligner == 'feature':
+                aligner = alignment.FeatureAligner
+            else:
+                raise ValueError('unrecognized aligner type: "{}"'.format(aligner))
+
+        if not isinstance(aligner, alignment.Aligner):
+            if callable(aligner):
+                aligner = aligner(**kwargs)
+            else:
+                raise ValueError('constitch.Aligner class or str expected for argument aligner')
+        elif len(kwargs) != 0:
+            raise ValueError('keyword arguments specified when argument aligner is already instantiated constitch.Aligner class')
+
         return self._calculate_future(aligner, executor).result()
 
     def _calculate_future(self, aligner=None, executor=None):
-        aligner = aligner or self.composite.aligner
         executor = executor or self.composite.executor
         #newconst = aligner.align(image1=self.image1, image2=self.image2, shape1=self.box1.size, shape2=self.box2.size, previous_constraint=self)
         future = executor.submit(_align_job, aligner, constraint=self)
@@ -742,7 +782,7 @@ class ConstraintSet:
                 yield future.result()
             i += batch_size
 
-    def calculate(self, aligner=None, executor=None):
+    def calculate(self, aligner='fft', executor=None, **kwargs):
         """ Calculates new constraints using an alignment algorithm
 
         For every constraint the provided aligner is invoked to calculate
@@ -750,12 +790,46 @@ class ConstraintSet:
         alignment.
 
         Args:
-            aligner (constitch.Aligner): default self.composite.aligner
-                The aligner that is used to calculate the new constraints
+            aligner (constitch.Aligner): default 'fft'
+                The aligner that is used to calculate the new constraints. Can be a
+                class that inherits from constitch.Aligner, an instantiated constitch.Aligner
+                instance, or a string of these options:
+                    'fft': uses constitch.FFTAligner. This uses the phase cross correlation
+                        algorithm to try to find the offset that maximizes the zero-normalized
+                        cross correlation (zncc) of the overlapping region. This is the main aligner
+                        and recommended for nearly all uses.
+                    'padded_fft': uses constitch.PaddedFFTAligner. the same as 'fft', except
+                        both images are padded to double their size. This prevents erroneous constraints
+                        as the phase cross correlation calculates the circular cross correlation.
+                        However, the increased processing needed for images of double size is not
+                        normally worth the improved performance.
+                    'feature': uses constitch.FeatureAligner. this uses feature detection and
+                        matching algorithms to find the offset of the two images. It has not been
+                        tested and is not recommended for use.
             executor (concurrent.futures.Executor): default self.composite.executor
                 A thread or process pool instance to parallelize the computation,
                 as some aligners can be quite slow
         """
+        from . import alignment
+        if type(aligner) == str:
+            aligner = aligner.lower()
+            if aligner == 'fft':
+                aligner = alignment.FFTAligner
+            elif aligner in ('padded_fft', 'padded-fft', 'padded fft'):
+                aligner = alignment.PaddedFFTAligner
+            elif aligner == 'feature':
+                aligner = alignment.FeatureAligner
+            else:
+                raise ValueError('unrecognized aligner type: "{}"'.format(aligner))
+
+        if not isinstance(aligner, alignment.Aligner):
+            if callable(aligner):
+                aligner = aligner(**kwargs)
+            else:
+                raise ValueError('constitch.Aligner class or str expected for argument aligner')
+        elif len(kwargs) != 0:
+            raise ValueError('keyword arguments specified when argument aligner is already instantiated constitch.Aligner class')
+
         if len(self) > 1:
             newset = ConstraintSet(self.progress(self._batched_calculate(aligner=aligner, executor=executor), total=len(self)))
             self.debug("Calculated", len(newset), "new constraints")

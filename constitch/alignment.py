@@ -58,8 +58,17 @@ class FFTAligner(Aligner):
     The algorithm is the same as described in Kuglin, Charles D. "The phase correlation image alignment method."
     http://boutigny.free.fr/Astronomie/AstroSources/Kuglin-Hines.pdf
     """
-    def __init__(self, num_peaks=2, precalculate_fft=True, downscale_factor=None, upscale_factor=1):
+    def __init__(self, score_func='zncc', num_peaks=2, precalculate_fft=True, downscale_factor=None, upscale_factor=1,
+            allow_edges=True, highpass_filter=0):
         """
+            score_func: function or str, default zncc
+                The score function used to score the overlapping area. Can be an arbitrary function that
+                takes two 2d numpy arrays of the same shape and returns a float, or a string out of the two options:
+                    'zncc': zero normalized cross correlation, the mean of both images are subtracted, then each is normalized
+                        with the L2 norm and the dot product is calculated. This tends to perform better as it
+                        can handle different intensity levels that might occur from unequal illumination.
+                    'ncc': normalized cross correlation, each image is normalized with the L2 norm and the dot product is calculated.
+                        This does not account for constant offsets while the zncc does.
             num_peaks: int default 2
                 Sets the number of peaks in the resulting phase cross correlation image to be checked. Sometimes the highest
                 peak is not actually the best offset for alignment so checking multiple peaks can help find the one that
@@ -74,11 +83,32 @@ class FFTAligner(Aligner):
                 of precision, the constraints calculated will have a nonzero error value. Also, if the downscale factor
                 is large enough the algorithm can begin to fail and not find any overlap, in general the largest recommended
                 value is around 32, but it depends on how large the features in your images are.
+            upscale_factor: int, optional
+            allow_edges: bool, default True
+                Whether offsets in only one dimention are allowed, specifically whether peaks found on the edges 
+                of the cross power spectrum are accepted. Edge artifacts can cause erroneous constraints to be
+                found, and disallowing them can improve the quality of calculated constraints. Of course if the
+                offset actually lies on the edge this will prevent it from being found, however it would probably
+                find an offset that is off by 1px.
+            highpass_filter: int, default 0
+                The cutoff frequency for a high pass filter applied to the images. This can be beneficial as
         """
+        if type(score_func) == str:
+            score_func = score_func.lower()
+            if score_func == 'zncc':
+                score_func = zncc_fast
+            elif score_func == 'ncc':
+                score_func = ncc_fast
+            else:
+                raise ValueError("Value of score_func '{}' not one of ('zncc', 'ncc')".format(score_func[:100]))
+
+        self.score_func = score_func
         self.num_peaks = num_peaks
         self.precalculate_fft = precalculate_fft
         self.downscale_factor = downscale_factor
         self.upscale_factor = upscale_factor
+        self.allow_edges = allow_edges
+        self.highpass_filter = highpass_filter
 
     def precalculate(self, image, box=None):
         if len(image.shape) == 3: image = image[:,:,0]
@@ -102,7 +132,7 @@ class FFTAligner(Aligner):
         if len(fft.shape) == 3:
             fft = fft.sum(axis=2)
 
-        score, dx, dy, overlap = find_peaks(fft, orig_section1, orig_section2, self.num_peaks)
+        score, dx, dy, overlap = find_peaks(fft, orig_section1, orig_section2, self.num_peaks)#, self.score_func)
 
         newconst = constraint.new_section(dx=dx, dy=dy, score=score, error=0)
         return newconst
@@ -125,6 +155,10 @@ class FFTAligner(Aligner):
         if image1.shape != image2.shape:
             image1, image2 = image_diff_sizes(image1, image2)
 
+        #import tifffile
+        #tifffile.imwrite('tmp_prefft1.tif', image1)
+        #tifffile.imwrite('tmp_prefft2.tif', image2)
+
         if image1.shape != orig_image1.shape or precalc1 is None or precalc1[1] is None: #precalc[1] would be none if precalculate_fft is false
             fft1 = np.fft.fft2(image1, axes=(0,1))
         else:
@@ -135,6 +169,20 @@ class FFTAligner(Aligner):
         else:
             fft2 = precalc2[1]
 
+        #apply high pass filter
+        fft1[:self.highpass_filter,:self.highpass_filter] = 0
+        fft1[:self.highpass_filter,fft1.shape[1]-self.highpass_filter:] = 0
+        fft1[fft1.shape[0]-self.highpass_filter:,:self.highpass_filter] = 0
+        fft1[fft1.shape[0]-self.highpass_filter:,fft1.shape[1]-self.highpass_filter:] = 0
+
+        fft2[:self.highpass_filter,:self.highpass_filter] = 0
+        fft2[:self.highpass_filter,fft2.shape[1]-self.highpass_filter:] = 0
+        fft2[fft2.shape[0]-self.highpass_filter:,:self.highpass_filter] = 0
+        fft2[fft2.shape[0]-self.highpass_filter:,fft2.shape[1]-self.highpass_filter:] = 0
+
+        #tifffile.imwrite('tmp_postfilter1.tif', np.fft.ifft2(fft1).real)
+        #tifffile.imwrite('tmp_postfilter2.tif', np.fft.ifft2(fft2).real)
+
         fft = calc_pcm(fft1.reshape(-1), fft2.reshape(-1)).reshape(fft1.shape)
         if self.upscale_factor > 1:
             fft_prod = fft
@@ -143,14 +191,23 @@ class FFTAligner(Aligner):
             fft = fft.sum(axis=2)
             #np.sum(fft, axis=2, 
 
-        if constraint is not None and constraint.error is not None and False:
-            score, dx, dy, overlap = find_peaks_estimate(fft, orig_image1, orig_image2, self.num_peaks,
+        if not self.allow_edges:
+            fft[0,:] = -np.inf
+            fft[-1,:] = -np.inf
+            fft[:,0] = -np.inf
+            fft[:,-1] = -np.inf
+
+        #import tifffile
+        #tifffile.imwrite('tmp_fft.tif', fft.astype(np.float32))
+
+        if constraint is not None and constraint.error is not None and constraint.error != math.inf and constraint.error != np.inf:
+            score, dx, dy, overlap = find_peaks_estimate(fft, orig_image1, orig_image2, self.num_peaks,# self.score_func,
                     estimate=(constraint.dx, constraint.dy), search_range=constraint.error)
             if score == -math.inf:
                 #print (dx, dy, previous_constraint.dx, previous_constraint.dy, previous_constraint.error, score)
-                return
+                return constraint
         else:
-            score, dx, dy, overlap = find_peaks(fft, orig_image1, orig_image2, self.num_peaks)
+            score, dx, dy, overlap = find_peaks(fft, orig_image1, orig_image2, self.num_peaks)#, self.score_func)
 
         if self.upscale_factor > 1:
             dx, dy = refine_peak(fft_prod, self.upscale_factor, np.array([dx, dy]))
@@ -446,6 +503,18 @@ def ncc_slow(image1, image2):
     assert image1.ndim == 2
     assert image2.ndim == 2
     assert np.array_equal(image1.shape, image2.shape)
+    image1 = image1.reshape(-1)
+    image2 = image2.reshape(-1)
+    n = np.dot(image1, image2)
+    d = np.linalg.norm(image1) * np.linalg.norm(image2)
+    return n / d
+
+def zncc_slow(image1, image2):
+    """Compute the zero-normalized cross correlation for two images.
+    """
+    assert image1.ndim == 2
+    assert image2.ndim == 2
+    assert np.array_equal(image1.shape, image2.shape)
     image1 = image1.reshape(-1) - np.mean(image1)
     image2 = image2.reshape(-1) - np.mean(image2)
     n = np.dot(image1, image2)
@@ -601,6 +670,21 @@ def calc_pcm(fft1, fft2):
 def ncc_fast(image1, image2):
     """Compute the normalized cross correlation for two images.
     """
+    total = np.float64(0)
+    norm1, norm2 = np.float64(0), np.float64(0)
+    for val1, val2 in zip(image1.flat, image2.flat):
+        total += val1 * val2
+        norm1 += val1 * val1
+        norm2 += val2 * val2
+    denom = np.sqrt(norm1) * np.sqrt(norm2)
+    if denom == 0 and total == 0:
+        return 0
+    return total / denom
+
+@numba.jit(nopython=True)
+def zncc_fast(image1, image2):
+    """Compute the zero normalized cross correlation for two images.
+    """
     mean1, mean2 = image1.mean(), image2.mean()
     total = np.float64(0)
     norm1, norm2 = np.float64(0), np.float64(0)
@@ -616,20 +700,29 @@ def ncc_fast(image1, image2):
     return total / denom
 
 @numba.jit(nopython=True)
-def find_peaks(fft, image1, image2, num_peaks):
+def find_peaks(fft, image1, image2, num_peaks):#, score_func):
     best_peak = (-math.inf,0,0,0.0)
     shape = (max(image1.shape[0], image2.shape[0]), max(image1.shape[1], image2.shape[1]))
+    #print (shape, fft.shape, image1.shape, image2.shape)
+    #print ('best fft', fft[shape[0]-241, 102])
     for i in range(num_peaks):
         peak_index = np.argmax(fft, axis=None)
+        peak_val = fft.ravel()[peak_index]
         abs_xval, abs_yval = peak_index // fft.shape[1], peak_index % fft.shape[1]
+        #print ('trying ', peak_val, abs_xval, abs_yval)
+        #print (abs_xval, abs_yval, fft[abs_xval,abs_yval])
+        #print (fft.reshape(-1)[peak_index], fft[abs_xval,abs_yval])
+        #abs_xval, abs_yval = shape[0]-235, 120
         for abs_xval in (abs_xval, shape[0] - abs_xval):
             for abs_yval in (abs_yval, shape[1] - abs_yval):
                 for xval in (abs_xval, -abs_xval):
                     for yval in (abs_yval, -abs_yval):
                         section1 = image1[max(0,xval):,max(0,yval):]
                         section2 = image2[max(0,-xval):,max(0,-yval):]
+                        #print (' ', section1.shape, section2.shape)
                         dim1 = min(section1.shape[0], section2.shape[0])
                         dim2 = min(section1.shape[1], section2.shape[1])
+                        #print (' ', dim1, dim2)
                         section1 = section1[:dim1,:dim2]
                         section2 = section2[:dim1,:dim2]
                         # only keeping sections with more than 100px overlap as anything lower
@@ -637,18 +730,21 @@ def find_peaks(fft, image1, image2, num_peaks):
                         if section1.size < 100: continue
 
                         overlap = max(section1.size / image1.size, section2.size / image2.size)
-                        peak = (ncc_fast(section1, section2), xval, yval, overlap)
+                        peak = (zncc_fast(section1, section2), xval, yval, overlap)
 
                         if peak[0] > best_peak[0]:
+                            #print ('  best ', peak_val, peak, section1.shape)
                             best_peak = peak
 
+                #print ('  ', abs_xval, abs_yval)
                 if abs_xval < shape[0] and abs_yval < shape[1]:
                     fft[abs_xval,abs_yval] = -np.inf
     
     return best_peak
 
 @numba.jit(nopython=True)
-def find_peaks_estimate(fft, image1, image2, num_peaks, estimate, search_range):
+def find_peaks_estimate(fft, image1, image2,# score_func,
+        num_peaks, estimate, search_range):
     best_peak = (-math.inf,0,0,0.0)
     shape = (max(image1.shape[0], image2.shape[0]), max(image1.shape[1], image2.shape[1]))
 
@@ -684,7 +780,7 @@ def find_peaks_estimate(fft, image1, image2, num_peaks, estimate, search_range):
                         if section1.size < 100: continue
 
                         overlap = max(section1.size / image1.size, section2.size / image2.size)
-                        peak = (ncc_fast(section1, section2), xval, yval, overlap)
+                        peak = (zncc_fast(section1, section2), xval, yval, overlap)
 
                         if peak[0] > best_peak[0]:
                             best_peak = peak
@@ -701,11 +797,15 @@ def image_diff_sizes(image1, image2):
 
     if image1.shape != new_shape:
         newimg = np.zeros(new_shape, dtype=image1.dtype)
+        #newimg[:] = image1.mean()
+        image1 = np.pad(image1, (0, 50), mode='linear_ramp', end_values=0)
         newimg[:image1.shape[0],:image1.shape[1]] = image1
         image1 = newimg
 
     if image2.shape != new_shape:
         newimg = np.zeros(new_shape, dtype=image2.dtype)
+        #newimg[:] = image2.mean()
+        image2 = np.pad(image2, (0, 50), mode='linear_ramp', end_values=0)
         newimg[:image2.shape[0],:image2.shape[1]] = image2
         image2 = newimg
 
@@ -743,7 +843,7 @@ def calculate_offset_fast(image1, image2, shape1=None, shape2=None, fft1=None, f
     fft = calc_pcm(fft1.reshape(-1), fft2.reshape(-1)).reshape(fft1.shape)
     fft = np.fft.ifft2(fft).real
 
-    best_peak = find_peaks(fft, orig_image1, orig_image2, num_peaks)
+    best_peak = find_peaks(fft, orig_image1, orig_image2, num_peaks, ncc_fast)
     return best_peak
 
 
@@ -787,6 +887,7 @@ def calculate_offset_slow(image1, image2, shape1=None, shape2=None, fft1=None, f
     return max_peak
 
 ncc = ncc_slow
+zncc = zncc_slow
 calculate_offset = calculate_offset_slow
 
 def score_offset(image1, image2, dx, dy):

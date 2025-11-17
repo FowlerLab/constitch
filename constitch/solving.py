@@ -118,6 +118,7 @@ class LinearSolver(Solver):
             print (np.mean(np.abs(residuals)), file=sys.stderr)
             self.constraints_accuracy = dict(zip(constraints.keys(), residuals))
 
+            """
             newconsts = {}
             for i, pair in enumerate(constraints.keys()):
                 const = constraints[pair]
@@ -127,6 +128,7 @@ class LinearSolver(Solver):
                 newconsts[pair] = newconst
 
             constraints = newconsts
+            """
 
         # find offset that minimizes error from rounding
         #for i in range(2):
