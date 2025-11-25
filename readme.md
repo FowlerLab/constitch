@@ -5,7 +5,10 @@ specifically designed to stitch and align microscopy image sets with multiple
 rounds of imaging, where each round needs to be aligned to each other as well
 as stitched together.
 
-Also see ASHLAR (<github.com/labsyspharm/ashlar>) for another package built to
+Check out this preprint ([doi.org/10.1101/2025.10.31.685785](https://doi.org/10.1101/2025.10.31.685785)) for more information
+on the algorithm of ConStitch as well.
+
+Also see ASHLAR ([github.com/labsyspharm/ashlar](https://github.com/labsyspharm/ashlar)) for another package built to
 stitch multi-cycle image sets, which also heavily inspired the design of this
 package.
 
@@ -22,7 +25,7 @@ ConStitch can be installed by cloning the repository, then installing with pip.
 Example scripts are provided in examples/ that can help you get started. More
 examples are coming, as well as an example dataset that can be downloaded and run easily.
 Additionally an example of a snakemake pipeline using constitch for stitching
-is available at <github.com/FowlerLab/starcall-workflow>.
+is available at [github.com/FowlerLab/starcall-workflow](https://github.com/FowlerLab/starcall-workflow)
 
 A simple example of stitching a single cycle of imaging consists of these steps:
 
@@ -73,7 +76,7 @@ as pixel values, see the documentation for the function [CompositeImage.add_imag
 for more information.
 
 This example goes through the different steps needed to stitch a 2d grid of images. Each of the functions
-used has reference documentation available at <fowlerlab.github.io/starcall-docs/constitch.html>
+used has reference documentation available at [fowlerlab.github.io/starcall-docs/constitch.html](https://fowlerlab.github.io/starcall-docs/constitch.html)
 
 
 
