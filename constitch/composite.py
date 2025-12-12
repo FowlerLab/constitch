@@ -1741,7 +1741,7 @@ class CompositeImage:
             ofile.write('</body></html>')
 
 
-    def viewer(self, path, constraints=None):
+    def viewer(self, path, constraints=None, include_images=True):
         import xml.etree.ElementTree as ET
         html = ET.Element('html')
 
@@ -1750,6 +1750,53 @@ class CompositeImage:
         meta = ET.SubElement(head, 'style')
         style.text = """
         """
+
+        if include_images:
+            image_size = 256
+            thumbnail_size = 64
+
+            def encode_image(image, name):
+                image = image * 255
+                np.clip(image, 0, 255, out=image)
+                image = image.astype(np.uint8)
+
+                pilimage = PIL.Image.fromarray(image)
+                image_data = io.BytesIO()
+                pilimage.save(image_data, format='jpeg')
+                image_data.seek(0)
+
+                img = ET.SubElement()
+                encoded = 'data:image/jpeg;base64,' + base64.b64encode(image_data.getvalue()).decode()
+                return encoded
+
+            downscaled_images = []
+            percentiles = []
+            for image in self.images:
+                downscale_ratio = min(image.shape[:2]) // image_size
+                image = skimage.transform.downscale_local_mean(image, downscale_ratio)
+                #image = image - np.percentile(image, 0.1)
+                #image = image / np.percentile(image, 99.9)
+                downscaled_images.append(image)
+                percentiles.append(np.percentile(image, [1, 99]))
+            percentiles = np.array(percentiles)
+
+            percentile = np.mean(percentiles, axis=0)
+            if has_layers:
+                percentile_layers = {}
+                for layer in np.unique(self.boxes.positions[:,2]):
+                    percentile_layers[layer] = np.mean(percentiles[self.boxes.positions[:,2]==layer], axis=0)
+                self.debug (percentile_layers)
+            #percentile = np.mean(percentiles)
+
+            for i, image in enumerate(downscaled_images):
+                #add_image(image, 'image{}'.format(i))
+                image = skimage.transform.downscale_local_mean(image, image_size // thumbnail_size)
+                if has_layers:
+                    percentile = percentile_layers[self.boxes[i].position[2]]
+                image -= percentile[0]
+                image /= percentile[1]
+                #image = image / percentile
+                add_image(image, 'thumbnail{}'.format(i))
 
 
     def html_summary_old(self, path, score_func=None):

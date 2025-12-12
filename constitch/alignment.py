@@ -59,11 +59,10 @@ class FFTAligner(Aligner):
     http://boutigny.free.fr/Astronomie/AstroSources/Kuglin-Hines.pdf
     """
     def __init__(self, score_func='zncc', num_peaks=2, precalculate_fft=True, downscale_factor=None, upscale_factor=1,
-            allow_edges=True, highpass_filter=0):
+            allow_edges=True, highpass_filter=0, overlap_threshold=0):
         """
             score_func: function or str, default zncc
-                The score function used to score the overlapping area. Can be an arbitrary function that
-                takes two 2d numpy arrays of the same shape and returns a float, or a string out of the two options:
+                The score function used to score the overlapping area. Can be a string out of the two options:
                     'zncc': zero normalized cross correlation, the mean of both images are subtracted, then each is normalized
                         with the L2 norm and the dot product is calculated. This tends to perform better as it
                         can handle different intensity levels that might occur from unequal illumination.
@@ -92,8 +91,10 @@ class FFTAligner(Aligner):
                 find an offset that is off by 1px.
             highpass_filter: int, default 0
                 The cutoff frequency for a high pass filter applied to the images. This can be beneficial as
+            overlap_threshold: float, default 0
+                The minimum overlap ratio to consider a constraint
         """
-        if type(score_func) == str:
+        if False and type(score_func) == str:
             score_func = score_func.lower()
             if score_func == 'zncc':
                 score_func = zncc_fast
@@ -109,6 +110,7 @@ class FFTAligner(Aligner):
         self.upscale_factor = upscale_factor
         self.allow_edges = allow_edges
         self.highpass_filter = highpass_filter
+        self.overlap_threshold = overlap_threshold
 
     def precalculate(self, image, box=None):
         if len(image.shape) == 3: image = image[:,:,0]
@@ -132,7 +134,7 @@ class FFTAligner(Aligner):
         if len(fft.shape) == 3:
             fft = fft.sum(axis=2)
 
-        score, dx, dy, overlap = find_peaks(fft, orig_section1, orig_section2, self.num_peaks)#, self.score_func)
+        score, dx, dy, overlap = find_peaks(fft, orig_section1, orig_section2, self.num_peaks, self.score_func == 'zncc', self.overlap_threshold)#, self.score_func)
 
         newconst = constraint.new_section(dx=dx, dy=dy, score=score, error=0)
         return newconst
@@ -201,13 +203,13 @@ class FFTAligner(Aligner):
         #tifffile.imwrite('tmp_fft.tif', fft.astype(np.float32))
 
         if constraint is not None and constraint.error is not None and constraint.error != math.inf and constraint.error != np.inf:
-            score, dx, dy, overlap = find_peaks_estimate(fft, orig_image1, orig_image2, self.num_peaks,# self.score_func,
+            score, dx, dy, overlap = find_peaks_estimate(fft, orig_image1, orig_image2, self.num_peaks, self.score_func == 'zncc', self.overlap_threshold,# self.score_func,
                     estimate=(constraint.dx, constraint.dy), search_range=constraint.error)
             if score == -math.inf:
                 #print (dx, dy, previous_constraint.dx, previous_constraint.dy, previous_constraint.error, score)
                 return constraint
         else:
-            score, dx, dy, overlap = find_peaks(fft, orig_image1, orig_image2, self.num_peaks)#, self.score_func)
+            score, dx, dy, overlap = find_peaks(fft, orig_image1, orig_image2, self.num_peaks, self.score_func == 'zncc', self.overlap_threshold)#, self.score_func)
 
         if self.upscale_factor > 1:
             dx, dy = refine_peak(fft_prod, self.upscale_factor, np.array([dx, dy]))
@@ -225,6 +227,7 @@ class FFTAligner(Aligner):
 class PaddedFFTAligner(FFTAligner):
 
     def precalculate(self, image, box=None):
+        error_not_implemented
         if len(image.shape) == 3: image = image[:,:,0]
         image = self.resize_if_needed(image, box, downscale_factor=self.downscale_factor, padding=box.size[:2])
         fft = None if not self.precalculate_fft else np.fft.fft2(image, axes=(0,1))
@@ -234,13 +237,15 @@ class PaddedFFTAligner(FFTAligner):
         image1, image2 = constraint.image1, constraint.image2
         orig_orig_image1, orig_orig_image2 = image1, image2
 
+        padding = np.minimum(constraint.box1.size, constraint.box2.size)
+
         if precalc1 is None:
-            image1 = self.resize_if_needed(image1, shape1, downscale_factor=self.downscale_factor, padding=shape1)
+            image1 = self.resize_if_needed(image1, constraint.box1, downscale_factor=self.downscale_factor, padding=padding)
         else:
             image1 = precalc1[0]
 
         if precalc2 is None:
-            image2 = self.resize_if_needed(image2, shape2, downscale_factor=self.downscale_factor, padding=shape2)
+            image2 = self.resize_if_needed(image2, constraint.box2, downscale_factor=self.downscale_factor, padding=padding)
         else:
             image2 = precalc2[0]
 
@@ -268,7 +273,7 @@ class PaddedFFTAligner(FFTAligner):
         dx, dy = np.unravel_index(np.argmax(fft), fft.shape)
         score = fft[dx,dy]
         dx, dy = dx % constraint.box1.size[0], dy % constraint.box1.size[1]
-        return Constraint(previous_constraint, dx=dx, dy=dy, score=score, error=0)
+        return Constraint(constraint, dx=dx, dy=dy, score=score, error=0)
 
 
 class PCCAligner(Aligner):
@@ -659,14 +664,14 @@ def interpret_translation(image1, image2, yins, xins, ymin, ymax, xmin, xmax,
 
 
 
-@numba.jit(nopython=True)
+@numba.jit(nopython=True, nogil=True)
 def calc_pcm(fft1, fft2):
     for i in range(fft1.shape[0]):
         val = fft1[i] * np.conjugate(fft2[i])
         fft1[i] = val / (np.abs(val) + 0.0000000000001)
     return fft1
 
-@numba.jit(nopython=True)
+@numba.jit(nopython=True, nogil=True)
 def ncc_fast(image1, image2):
     """Compute the normalized cross correlation for two images.
     """
@@ -681,7 +686,7 @@ def ncc_fast(image1, image2):
         return 0
     return total / denom
 
-@numba.jit(nopython=True)
+@numba.jit(nopython=True, nogil=True)
 def zncc_fast(image1, image2):
     """Compute the zero normalized cross correlation for two images.
     """
@@ -699,8 +704,8 @@ def zncc_fast(image1, image2):
         return 0
     return total / denom
 
-@numba.jit(nopython=True)
-def find_peaks(fft, image1, image2, num_peaks):#, score_func):
+@numba.jit(nopython=True, nogil=True)
+def find_peaks(fft, image1, image2, num_peaks, zncc_score, overlap_thresh):#, score_func):
     best_peak = (-math.inf,0,0,0.0)
     shape = (max(image1.shape[0], image2.shape[0]), max(image1.shape[1], image2.shape[1]))
     #print (shape, fft.shape, image1.shape, image2.shape)
@@ -709,14 +714,17 @@ def find_peaks(fft, image1, image2, num_peaks):#, score_func):
         peak_index = np.argmax(fft, axis=None)
         peak_val = fft.ravel()[peak_index]
         abs_xval, abs_yval = peak_index // fft.shape[1], peak_index % fft.shape[1]
+        fft[abs_xval,abs_yval] = -np.inf
         #print ('trying ', peak_val, abs_xval, abs_yval)
         #print (abs_xval, abs_yval, fft[abs_xval,abs_yval])
         #print (fft.reshape(-1)[peak_index], fft[abs_xval,abs_yval])
         #abs_xval, abs_yval = shape[0]-235, 120
-        for abs_xval in (abs_xval, shape[0] - abs_xval):
-            for abs_yval in (abs_yval, shape[1] - abs_yval):
-                for xval in (abs_xval, -abs_xval):
-                    for yval in (abs_yval, -abs_yval):
+        for xval in (abs_xval, abs_xval - shape[0]):
+            for yval in (abs_yval, abs_yval - shape[0]):
+        #for abs_xval in (abs_xval, shape[0] - abs_xval):
+            #for abs_yval in (abs_yval, shape[1] - abs_yval):
+                #for xval in (abs_xval, -abs_xval):
+                    #for yval in (abs_yval, -abs_yval):
                         section1 = image1[max(0,xval):,max(0,yval):]
                         section2 = image2[max(0,-xval):,max(0,-yval):]
                         #print (' ', section1.shape, section2.shape)
@@ -730,27 +738,36 @@ def find_peaks(fft, image1, image2, num_peaks):#, score_func):
                         if section1.size < 100: continue
 
                         overlap = max(section1.size / image1.size, section2.size / image2.size)
-                        peak = (zncc_fast(section1, section2), xval, yval, overlap)
+                        if overlap < overlap_thresh:
+                            continue
+
+                        if zncc_score:
+                            peak = (zncc_fast(section1, section2), xval, yval, overlap)
+                        else:
+                            peak = (ncc_fast(section1, section2), xval, yval, overlap)
 
                         if peak[0] > best_peak[0]:
                             #print ('  best ', peak_val, peak, section1.shape)
                             best_peak = peak
 
                 #print ('  ', abs_xval, abs_yval)
-                if abs_xval < shape[0] and abs_yval < shape[1]:
-                    fft[abs_xval,abs_yval] = -np.inf
+                #if abs_xval < shape[0] and abs_yval < shape[1]:
+                    #fft[abs_xval,abs_yval] = -np.inf
     
     return best_peak
 
-@numba.jit(nopython=True)
-def find_peaks_estimate(fft, image1, image2,# score_func,
-        num_peaks, estimate, search_range):
+@numba.jit(nopython=True, nogil=True)
+def find_peaks_estimate(fft, image1, image2, num_peaks,
+        zncc_score, overlap_thresh,# score_func,
+        estimate, search_range):
     best_peak = (-math.inf,0,0,0.0)
     shape = (max(image1.shape[0], image2.shape[0]), max(image1.shape[1], image2.shape[1]))
 
     for x in range(fft.shape[0]):
         for y in range(fft.shape[1]):
             in_range = False
+            #for xval in (x, x - shape[0]):
+                #for yval in (y, y - shape[1]):
             for xval in (x, shape[0] - x):
                 for yval in (y, shape[1] - y):
                     for xval in (xval, -xval):
@@ -759,15 +776,27 @@ def find_peaks_estimate(fft, image1, image2,# score_func,
             if not in_range:
                 fft[x,y] = -np.inf
 
+    #print (np.isinf(fft))
+    #print ('\n'.join(''.join('1' if val else '0' for val in row) for row in np.isinf(fft)))
+    #print (fft.size, np.sum(np.isinf(fft)))
+    #print (num_peaks)
+
     for i in range(num_peaks):
         peak_index = np.argmax(fft, axis=None)
         abs_xval, abs_yval = peak_index // fft.shape[1], peak_index % fft.shape[1]
-        for abs_xval in (abs_xval, shape[0] - abs_xval):
-            for abs_yval in (abs_yval, shape[1] - abs_yval):
-                for xval in (abs_xval, -abs_xval):
-                    for yval in (abs_yval, -abs_yval):
+        #print ('peak index', peak_index, abs_xval, abs_yval, fft[abs_xval,abs_yval])
+
+        fft[abs_xval,abs_yval] = -np.inf
+        for xval in (abs_xval, abs_xval - shape[0]):
+            for yval in (abs_yval, abs_yval - shape[0]):
+        #for abs_xval in (abs_xval, shape[0] - abs_xval):
+            #for abs_yval in (abs_yval, shape[1] - abs_yval):
+                #for xval in (abs_xval, -abs_xval):
+                    #for yval in (abs_yval, -abs_yval):
+                        #print (' ', xval, yval, max(abs(estimate[0] - xval), abs(estimate[1] - yval)))
                         if max(abs(estimate[0] - xval), abs(estimate[1] - yval)) > search_range:
                             continue
+                        #print ('checking')
 
                         section1 = image1[max(0,xval):,max(0,yval):]
                         section2 = image2[max(0,-xval):,max(0,-yval):]
@@ -780,13 +809,19 @@ def find_peaks_estimate(fft, image1, image2,# score_func,
                         if section1.size < 100: continue
 
                         overlap = max(section1.size / image1.size, section2.size / image2.size)
-                        peak = (zncc_fast(section1, section2), xval, yval, overlap)
+                        if overlap < overlap_thresh:
+                            continue
+
+                        if zncc_score:
+                            peak = (zncc_fast(section1, section2), xval, yval, overlap)
+                        else:
+                            peak = (ncc_fast(section1, section2), xval, yval, overlap)
 
                         if peak[0] > best_peak[0]:
                             best_peak = peak
 
-                if abs_xval < shape[0] and abs_yval < shape[1]:
-                    fft[abs_xval,abs_yval] = -np.inf
+                #if abs_xval < shape[0] and abs_yval < shape[1]:
+                    #fft[abs_xval,abs_yval] = -np.inf
 
     return best_peak
 
