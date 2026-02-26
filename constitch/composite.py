@@ -171,6 +171,16 @@ class BBox:
             point2=np.minimum(self.point2, other.point2),
         )
 
+    def union(self, other):
+        """ Returns a bounding box that contains both this box and the box passed in.
+        This is not really the union of the area of both boxes like is true for self.intersection,
+        as more area may need to be included into the box to contain both.
+        """
+        return BBox(
+            point1=np.minimum(self.point1, other.point1),
+            point2=np.maximum(self.point2, other.point2),
+        )
+
     def area(self):
         """ Returns the area of the box, basically self.size.prod()
         However if the size of the rectangle is negative in either or both
