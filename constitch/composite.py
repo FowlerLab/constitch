@@ -628,7 +628,7 @@ class CompositeImage:
         composite.__dict__.update(obj)
         return composite
 
-    def add_images(self, images, positions=None, boxes=None, scale='pixel', channel_axis=None, imagescale=1):
+    def add_images(self, images, positions=None, boxes=None, scale='pixel', channel_axis=None, imagescale=1, grid_positions=None):
         """ Adds images to the composite
 
         Args:
@@ -658,6 +658,9 @@ class CompositeImage:
                 If a sequence is given, each element can be any of the previous values,
                 which are applied to each axis.
         """
+        if positions is None and boxes is None and grid_positions is not None:
+            positions = grid_positions
+            scale = 'tile'
         if positions is None and boxes is None:
             positions = [(0,0)] * len(images)
         #assert positions is not None or boxes is not None, "Must specify positions or boxes"
