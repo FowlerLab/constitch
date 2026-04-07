@@ -82,7 +82,7 @@ from .alignment import calculate_offset, ncc, score_offset, Aligner, FFTAligner,
 from .stage_model import SimpleOffsetModel, GlobalStageModel
 from .stitching import stitch_cycles, make_test_image
 from .evaluation import evaluate_stitching, evaluate_grid_stitching
-from .merging import Merger, MeanMerger, EfficientMeanMerger, NearestMerger, MaskMerger, LastMerger, EfficientNearestMerger
+from .merging import Merger, MeanMerger, EfficientMeanMerger, NearestMerger, MaskMerger, LastMerger, EfficientNearestMerger, EfficientMaskMerger
 from .solving import Solver, LinearSolver, OptimalSolver, OutlierSolver, MAESolver, SpanningTreeSolver, LPSolver
 from .utils import save, load
 
@@ -114,6 +114,7 @@ __all__ = [
     "MaskMerger",
     "LastMerger",
     "EfficientNearestMerger",
+    "EfficientMaskMerger",
 
     "Solver",
     "LinearSolver",

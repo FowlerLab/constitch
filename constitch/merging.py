@@ -1,6 +1,7 @@
 import sys
 import numpy as np
-import skimage.io
+import skimage.measure
+import sklearn.neighbors
 
 from . import utils
 
@@ -295,3 +296,112 @@ class MaskMerger(NearestMerger):
         
         super().add_image(image, location)
 
+class EfficientMaskMerger(NearestMerger):
+    """ This merger is specifically for merging an image mask, where each integer represents
+    an independent class, for example cell segmentation masks. Works similar to MaskMerger, except
+    instead of calculating the exact pixel overlap of segmentation masks, it compares the overlap
+    of the bounding boxes. This is much more efficient, at the expense of some precision.
+    """
+    def __init__(self, overlap_threshold=0.75, dtype=np.uint32):
+        self.overlap_threshold = overlap_threshold
+        self.dtype = dtype
+        self.boxes = []
+        self.image_boxes = []
+
+    def create_image(self, image_shape, image_dtype):
+        super().create_image(image_shape, self.dtype)
+
+    def find_mapping(self, image_box, new_boxes):
+        """ Method that finds boxes (in this case representing cells) that overlap
+        between an image being added
+        """
+
+        mapping = {}
+
+        #import matplotlib.pyplot as plt
+        #fig, axes = plt.subplots(figsize=(50,50))
+        #image_box.plot(axes)
+        #for ibox in self.image_boxes:
+            #ibox.plot(axes)
+
+        new_overlapping_boxes = []
+        for i, box in enumerate(new_boxes):
+            if not any(box.intersection(ibox).area() > 0 for ibox in self.image_boxes):
+                continue
+
+            # checking if it will even be included in the image when merged with nearestmerger
+            # do this by calculating distance to edge for all boxes
+            dists_to_others = []
+            for other_image_box in self.image_boxes:
+                #dist_to_edge = np.minimum(box.point2 - other_image_box.point1, other_image_box.point2 - box.point1).min()
+                dist_to_edge = np.minimum(box.point1 - other_image_box.point1, other_image_box.point2 - box.point2).min()
+                dists_to_others.append(dist_to_edge)
+
+            dist_to_edge = np.minimum(box.point2 - image_box.point1, image_box.point2 - box.point1).min()
+            #dist_to_edge = np.minimum(box.point1 - image_box.point1, image_box.point2 - box.point2).min()
+            #print (dists_to_others, dist_to_edge, file=sys.stderr)
+            if any((dist > dist_to_edge) for dist in dists_to_others):
+                #box.plot(axes)
+                continue
+
+            #box.plot(axes)
+            new_overlapping_boxes.append((i, box))
+
+        #fig.savefig('tmp_boxes_plot{}.png'.format(len(self.image_boxes)))
+
+        #fig, axes = plt.subplots(figsize=(50,50))
+        #image_box.plot(axes)
+        #for ibox in self.image_boxes:
+            #ibox.plot(axes)
+
+        for i, box1 in enumerate(self.boxes):
+            if box1.intersection(image_box).area() <= 0:
+                continue
+
+            for j, box2 in new_overlapping_boxes:
+                area = box1.intersection(box2).area()
+                if area / box1.area() >= self.overlap_threshold and area / box2.area() >= self.overlap_threshold:
+                    mapping[j] = i + 1
+                    #box1.plot(axes, color='C{}'.format(i % 10))
+                    #box2.plot(axes, color='C{}'.format(i % 10))
+                    break
+
+        #fig.savefig('tmp_boxes_plot_matched{}.png'.format(len(self.image_boxes)))
+
+        mapping_array = np.arange(len(new_boxes) + 1, dtype=self.dtype)
+
+        for i in range(len(new_boxes)):
+            if i not in mapping:
+                self.boxes.append(new_boxes[i])
+                mapping_array[i+1] = len(self.boxes)
+            else:
+                mapping_array[i+1] = mapping[i]
+
+        self.image_boxes.append(image_box)
+
+        return mapping_array
+
+
+    def add_image(self, image, location):
+        from .composite import BBox # Fix imports
+        #print ("Adding image", location, file=sys.stderr)
+        #image = image.astype(self.dtype)
+        image_box = BBox(point1=[location[0].start, location[1].start], point2=[location[0].stop, location[1].stop])
+
+        offset = location[0].start, location[1].start
+        props = skimage.measure.regionprops(image)
+
+        new_boxes = [None] * len(props)
+        for prop in props:
+            new_boxes[prop.label-1] = BBox(
+                point1=[prop.bbox[0] + offset[0], prop.bbox[1] + offset[1]],
+                point2=[prop.bbox[2] + offset[0], prop.bbox[3] + offset[1]],
+            )
+
+        prev_len_boxes = len(self.boxes)
+        mapping = self.find_mapping(image_box, new_boxes)
+        print ("Merging ({}/{}) overlapping labels".format(len(new_boxes) - (len(self.boxes) - prev_len_boxes), len(new_boxes)), file=sys.stderr)
+
+        image = mapping[image]
+
+        super().add_image(image, location)

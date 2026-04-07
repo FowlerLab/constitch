@@ -190,6 +190,13 @@ class BBox:
             return -self.size.prod()
         return self.size.prod()
 
+    def plot(self, axes, **kwargs):
+        """ Plots the box on a matplotlib axes object
+        """
+        xvals = [self.point1[0], self.point1[0], self.point2[0], self.point2[0], self.point1[0]]
+        yvals = [self.point1[1], self.point2[1], self.point2[1], self.point1[1], self.point1[1]]
+        axes.plot(xvals, yvals, **kwargs)
+
 
 
 class BBoxList:
