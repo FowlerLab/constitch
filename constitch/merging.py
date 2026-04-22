@@ -60,6 +60,19 @@ class LastMerger(Merger):
     def final_image(self):
         return self.image, np.ones(self.image.shape, dtype=bool)
 
+class MaxMerger(Merger):
+    """ This is another simple merger, the maximum value is taken for all pixels in overlapping regions.
+    This means it also has no extra memory requirements
+    """
+    def create_image(self, image_shape, image_dtype):
+        self.image = np.zeros(image_shape, image_dtype)
+
+    def add_image(self, image, location):
+        np.maximum(self.image[location], image, out=self.image[location])
+
+    def final_image(self):
+        return self.image, np.ones(self.image.shape, dtype=bool)
+
 class MeanMerger(Merger):
     """ A merger that calculates the mean of any overlapping areas. This requires
     storing the whole image using a larger dtype, eg when merging uint16 images
@@ -172,6 +185,8 @@ class EfficientNearestMerger(Merger):
         mask = dists >= cur_dists
         cur_image[mask] = image[mask]
         cur_dists[mask] = dists[mask]
+        print ('after adding image, max and num unique', cur_image.max(), len(np.unique(cur_image)), file=sys.stderr)
+        print ('does 18 exist', 18 in list(np.unique(cur_image)), file=sys.stderr)
 
     def final_image(self):
         return self.image, self.dists != 0
