@@ -1676,6 +1676,34 @@ class SubCompositeBBoxList(BBoxList):
         poses.setflags(write=False)
         return poses
 
+    def setpositions(self, positions):
+        """ Applies new positions to all boxes
+        Args:
+            positions (sequence of positions, dict of positions, callable):
+                Specifies a change in positions for boxes, depending on the type:
+                    If a numpy array, the new positions are set as self.positions, maintaining sizes of boxes.
+                    If a dict of positions, each entry will be set as the position of the box at the key.
+                    If a callable, it is invoked for each box. If it returns a new position it is applied to the box
+        """
+
+        #TODO: make work with 2d arrays
+        if isinstance(positions, solving.Solver):
+            for index, pos in positions.positions.items():
+                self.boxes.items.positions[index,:len(pos)] = pos
+
+        if isinstance(positions, np.ndarray):
+            self.boxes.items.positions[self.boxes.mapping[:len(self.boxes)]] = positions
+
+        elif isinstance(positions, dict):
+            for index, pos in positions.items():
+                self.boxes.items.positions[self.boxes.mapping[index]] = pos
+
+        elif callable(positions):
+            for box in self.boxes:
+                result = positions(box)
+                if result is not None:
+                    box._position[...] = result
+
 
 class SubCompositeImage(CompositeImage):
     """ A CompositeImage made from a subset of the images in another CompositeImage instance.

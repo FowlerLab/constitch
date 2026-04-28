@@ -106,7 +106,8 @@ class LinearSolver(Solver):
     def solve(self, constraints, initial_poses):
         orig_constraints = constraints.copy()
         #image_indices = sorted(list(set(pair[0] for pair in constraints) | set(pair[1] for pair in constraints)))
-        for i in range(1):
+        #for i in range(1):
+        if True:
             solution_mat, solution_vals, initial_values = self.make_constraint_matrix(constraints, initial_poses)
 
             solution = self.solve_matrix(solution_mat, solution_vals, initial_values)
@@ -118,15 +119,15 @@ class LinearSolver(Solver):
             print (np.mean(np.abs(residuals)), file=sys.stderr)
             self.constraints_accuracy = dict(zip(constraints.keys(), residuals))
 
-            newconsts = {}
-            for i, pair in enumerate(constraints.keys()):
-                const = constraints[pair]
-                offset = poses[pair[1]] - poses[pair[0]]
-                #offset = np.round(offset).astype(int)
-                newconst = Constraint(const.composite, pair[0], pair[1], offset[0], offset[1], const.score, const.error)
-                newconsts[pair] = newconst
+            #newconsts = {}
+            #for i, pair in enumerate(constraints.keys()):
+                #const = constraints[pair]
+                #offset = poses[pair[1]] - poses[pair[0]]
+                ##offset = np.round(offset).astype(int)
+                #newconst = Constraint(const.composite, pair[0], pair[1], offset[0], offset[1], const.score, const.error)
+                #newconsts[pair] = newconst
 
-            constraints = newconsts
+            #constraints = newconsts
 
         # find offset that minimizes error from rounding
         #for i in range(2):
