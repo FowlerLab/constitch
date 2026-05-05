@@ -213,6 +213,27 @@ class BBoxList:
             for i in range(len(self._positions)):
                 self.boxes.append(BBox(self._positions[i], self._sizes[i]))
 
+    @classmethod
+    def from_table(cls, table):
+        """ Creates a BBoxList from a pandas-style table with columns
+        bbox_x1, bbox_y1, bbox_x2, bbox_y2.
+        Accepts tables created by BBoxList.totable()
+        """
+        point1 = np.array([table['bbox_x1'], table['bbox_y1']]).T
+        point2 = np.array([table['bbox_x2'], table['bbox_y2']]).T
+        return cls(positions=point1, sizes=point2 - point1)
+
+    def to_table(table=None):
+        """ Creates a pandas-style table or adds columns to an existing table
+        representing the boxes in this instance
+        """
+        table = table or {}
+        table['bbox_x1'] = points1[:,0]
+        table['bbox_y1'] = points1[:,1]
+        table['bbox_x2'] = points2[:,0]
+        table['bbox_y2'] = points2[:,1]
+        return table
+
     def append(self, box):
         """ Add a new BBox to this list. Typically users should not need to use
         this, instead add images through the CompositeImage.add_images and similar
