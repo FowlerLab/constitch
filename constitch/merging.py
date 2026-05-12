@@ -185,8 +185,8 @@ class EfficientNearestMerger(Merger):
         mask = dists >= cur_dists
         cur_image[mask] = image[mask]
         cur_dists[mask] = dists[mask]
-        print ('after adding image, max and num unique', cur_image.max(), len(np.unique(cur_image)), file=sys.stderr)
-        print ('does 18 exist', 18 in list(np.unique(cur_image)), file=sys.stderr)
+        #print ('after adding image, max and num unique', cur_image.max(), len(np.unique(cur_image)), file=sys.stderr)
+        #print ('does 18 exist', 18 in list(np.unique(cur_image)), file=sys.stderr)
 
     def final_image(self):
         return self.image, self.dists != 0

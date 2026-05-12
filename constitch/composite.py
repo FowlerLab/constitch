@@ -1306,7 +1306,7 @@ class CompositeImage:
         if maxes is not None:
             start_maxes[:] = maxes
 
-        mins, maxes = start_mins, start_maxes
+        mins, maxes = np.floor(start_mins).astype(int), np.ceil(start_maxes).astype(int)
 
         if keep_zero:
             mins = np.zeros_like(mins)
