@@ -1,4 +1,5 @@
 import {setColorMat, setBounds} from './settings';
+import {undoMove, undoAllMoves} from './display';
 
 function openCommandLine() {
     const input = document.querySelector('#command-line input');
@@ -14,7 +15,15 @@ const commands = {
     print: console.log,
     fisseq: () => {setBounds(5000); setColorMat('--mcgr')},
     bounds: (...args) => setBounds(...args),
+    undo: () => undoMove(),
+    undoall: () => undoAllMoves(),
 };
+
+export const keyShortcuts = {
+    h: 'help',
+    u: 'undo',
+    U: 'undoall',
+}
 
 function display(message) {
     const input = document.querySelector('#command-line input');
@@ -46,8 +55,8 @@ function runCommand(command) {
 
     if (matchingCommands.length == 0) {
         display("No command matching '" + command + "' found");
-    } else if (matchingCommands.length > 1) {
-        display("Ambiguous command, '" + command + "' matches all of " + matchingCommands);
+    //} else if (matchingCommands.length > 1) {
+        //display("Ambiguous command, '" + command + "' matches all of " + matchingCommands);
     } else {
         try {
             commands[matchingCommands[0]](...args);

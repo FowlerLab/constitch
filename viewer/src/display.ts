@@ -1,6 +1,6 @@
 import {convertImage, transformIn, transformOut, intersection} from "./image";
 import {onKeyDownCommands} from "./commands";
-import {exampleImage} from "./main";
+import {exampleImage} from "./config";
 import {globalColorMat, globalBounds} from "./colors";
 
 export let activeImages = {};
@@ -267,10 +267,51 @@ export function onViewChange() {
     }, 500);
 }
 
+export var undoList = [];
+
+export function undoMove() {
+    if (undoList.length == 0) return;
+
+    const prevstate = undoList.pop();
+    console.log(prevstate)
+    for (let canvasid of Object.keys(prevstate)) {
+        activeImages[canvasid].box[0] = prevstate[canvasid][0]
+        activeImages[canvasid].box[1] = prevstate[canvasid][1]
+        setImagePos(activeImages[canvasid], activeImages[canvasid].box)
+    }
+    onViewChange();
+    updateTransform(globalScreenBox);
+}
+
+export function undoAllMoves() {
+    while (undoList.length > 0) {
+        undoMove();
+    }
+}
+
+
 document.getElementById('plot').addEventListener('click', (event) => {
     //const loadingSetting = document.querySelector('input[name="loading-behaviour"]:checked').value;
     onScreenChange();
 });
+
+document.getElementById('plot').addEventListener('mousedown', (event) => {
+    const tool = document.querySelector('input[name="tool"]:checked').value
+
+    if (tool == 'move' || tool == 'select') {
+        if (event.target.classList.contains('selected') && (tool == 'select' || event.ctrlKey)) {
+            event.target.classList.remove('selected')
+            return;
+        }
+        if (!event.ctrlKey && tool != 'select') {
+            document.querySelectorAll('.image.selected').forEach(elem => elem.classList.remove('selected'))
+        }
+        if (event.target.tagName == 'CANVAS') {
+            event.target.classList.add('selected')
+        }
+    }
+})
+
 
 document.getElementById('plot').addEventListener('mousemove', (event) => {
     if (event.buttons != 1) return;
@@ -280,11 +321,15 @@ document.getElementById('plot').addEventListener('mousemove', (event) => {
         globalScreenBox[0] += -event.movementX * (globalScreenBox[2] / window.innerWidth);
         globalScreenBox[1] += -event.movementY * (globalScreenBox[3] / window.innerHeight);
     } else if (tool == 'move') {
-        if (event.target.tagName != 'CANVAS') return;
-        const image = activeImages[event.target.id];
-        image.box[0] += event.movementX * (globalScreenBox[2] / window.innerWidth);
-        image.box[1] += event.movementY * (globalScreenBox[3] / window.innerHeight);
-        setImagePos(image, image.box)
+        const prevstate = {};
+        for (const canvas of document.querySelectorAll('.image.selected')) {
+            const image = activeImages[canvas.id];
+            prevstate[canvas.id] = [image.box[0], image.box[1]];
+            image.box[0] += event.movementX * (globalScreenBox[2] / window.innerWidth);
+            image.box[1] += event.movementY * (globalScreenBox[3] / window.innerHeight);
+            setImagePos(image, image.box)
+        }
+        undoList.push(prevstate);
     }
     onViewChange();
     updateTransform(globalScreenBox);

@@ -1,0 +1,328 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<style>
+
+body {
+    margin: 0;
+    font-family: 'mono';
+}
+
+main {
+    display: flex;
+    width: 100vw;
+    height: 100vh;
+}
+
+#plot {
+    position: relative;
+    overflow: clip;
+    width: 100%;
+    height: 100%;
+}
+
+#axes {
+    position: absolute;
+}
+
+.image {
+    position: absolute;
+}
+
+#fetched-images {
+    display: none;
+}
+
+#raw-canvases {
+    display: none;
+}
+
+footer {
+    position: fixed;
+    top: 0;
+    right: 0;
+    text-align: end;
+}
+
+.bounds input {
+    display: block;
+    width: calc(100% - 20px);
+    padding-left: 10px;
+}
+
+.menu details {
+    padding-top: 0.5em;
+    padding-left: 0.75em;
+    padding-right: 0.75em;
+    padding-bottom: 0.5em;
+    border: 1.5px solid black;
+    margin-left: 2px;
+    margin-right: 2px;
+    margin-top: -1.5px;
+    background-color: white;
+    text-align: start;
+}
+
+.menu details.first {
+    margin-top: 0.5em;
+}
+
+.menu details:not([open]).last {
+    padding-top: 0;
+    padding-bottom: 0;
+    margin-bottom: 0;
+    border-bottom: none;
+}
+
+
+.menu summary {
+    list-style-type: none;
+    position: relative;
+    top: -1.15em;
+    height: 0;
+    text-align: end;
+}
+
+.menu details:not([open]).last summary {
+    top: -0.65em;
+}
+
+.menu details summary span {
+    background-color: white;
+}
+
+.menu details summary span span::after {
+    content: '[+]';
+}
+
+.menu details[open] summary span span::after {
+    content: '[-]';
+}
+
+
+.menu summary.title {
+    position: relative;
+    top: -0.7em;
+    padding-left: 1em;
+    margin-bottom: -1.3em;
+}
+
+.menu summary.title::before {
+    content: '+ ';
+    font-family: 'mono';
+}
+.menu[open] .title::before {
+    content: '- ';
+}
+
+.button {
+    cursor: pointer;
+}
+
+.button:hover {
+    font-weight: bold;
+}
+
+
+.channel-colorselectors {
+    display: flex;
+}
+
+.colorselector {
+    height: 1.2em;
+    position: relative;
+}
+
+.colorselector > span {
+    display: flex;
+    flex-direction: column;
+    background-color: white;
+}
+
+.colorselector > span > span {
+    display: none;
+}
+
+.colorselector > span > span.selected, .colorselector.open > span > span {
+    display: unset;
+}
+
+.channels {
+    display: flex;
+}
+
+.dropdown {
+    height: 1.2em;
+    position: relative;
+    display: flex;
+    flex-direction: column;
+}
+
+.dropdown > label {
+    display: none;
+    background: white;
+}
+
+.dropdown.open > label {
+    display: inline;
+}
+
+.dropdown > label:has(input:checked) {
+    display: inline;
+    font-weight: bold;
+}
+
+input.hide {
+    appearance: none;
+    margin: 0;
+}
+
+
+.minimap {
+    display: inline-block;
+}
+
+.minimap-container {
+    position: relative;
+    margin: 2px 0 2px 0;
+}
+
+.minimap .viewbox-container {
+    position: absolute;
+    left: 0;
+    top: 0;
+    width: 100%;
+    height: 100%;
+    overflow: clip;
+}
+
+.minimap .viewbox, .minimap .viewbox-dashed {
+    position: absolute;
+    left: 30px;
+    top: 30px;
+    width: 50px;
+    height: 20px;
+    border: 2px solid red;
+    box-sizing: border-box;
+}
+
+.minimap .viewbox-dashed {
+    border: 2px dashed red;
+}
+
+.minimap canvas {
+    display: block;
+}
+
+
+#command-line {
+    position: fixed;
+    bottom: -2em;
+}
+
+#command-line input {
+    font-family: inherit;
+    background: white;
+    border: 0;
+    margin: 0;
+    padding: 0;
+    width: 100vw;
+}
+
+#command-line:focus-within {
+    bottom: 0;
+}
+
+
+.textradio::before {
+    content: "[ ";
+}
+
+.textradio:has(input:checked)::before {
+    content: "[*";
+}
+
+.textradio::after {
+    content: "]";
+}
+
+</style>
+</head>
+
+<body>
+
+<main>
+    <div id="plot">
+        <div id="axes"></div>
+    </div>
+</main>
+
+<footer class="menu" >
+    <details class="minimap first" open>
+        <summary><span><span></span></span></summary>
+        <div class="minimap-container" >
+            <canvas width="150" height="150"></canvas>
+            <div class="viewbox-container">
+                <div class="viewbox-dashed"></div>
+                <div class="viewbox"></div>
+            </div>
+        </div>
+    </details>
+    <details class="last" open>
+        <summary><span><span>[Params]</span></span></summary>
+
+        <div>
+            <label class="textradio"><input class="hide" type="radio" name="tool" value="pan" checked>Pan</label>
+            <label class="textradio"><input class="hide" type="radio" name="tool" value="move">Move</label>
+            <label class="textradio"><input class="hide" type="radio" name="tool" value="select">Select</label>
+        </div>
+
+        <div>
+            Loading:
+            <label class="textradio"><input class="hide" type="radio" name="loading-behaviour" value="auto">Auto</label>
+            <label class="textradio"><input class="hide" type="radio" name="loading-behaviour" value="click" checked>Click</label>
+        </div>
+
+        <!--<div>
+            Normalize:
+            <span class="button">[99.9%]</span>
+            <span class="button">[99%]</span><br>
+            separately
+            <span class="button">[99.9%]</span>
+            <span class="button">[99%]</span><br>
+        </div>-->
+
+        <div class="channels">
+            Channels:
+            <div class="dropdown channel0">
+                <label style="color: black"><input class="hide" name="ch{channel}color" type="radio" value="-">[-]</label>
+                <label style="color: red"><input class="hide" name="ch{channel}color" type="radio" value="r">[R]</label>
+                <label style="color: green"><input class="hide" name="ch{channel}color" type="radio" value="g">[G]</label>
+                <label style="color: blue"><input class="hide" name="ch{channel}color" type="radio" value="b">[B]</label>
+                <label style="color: magenta"><input class="hide" name="ch{channel}color" type="radio" value="m">[M]</label>
+                <label style="color: cyan"><input class="hide" name="ch{channel}color" type="radio" value="c">[C]</label>
+                <label style="color: yellow"><input class="hide" name="ch{channel}color" type="radio" value="y">[Y]</label>
+                <label style="color: black"><input class="hide" name="ch{channel}color" type="radio" value="w">[W]</label>
+            </div>
+        </div>
+
+        <div class="bounds">
+            Bounds:
+            <label class="channel0">
+                <input style="margin-bottom: -8px;" class="min" type="range" min="0" max="65535" step="1" name="channel{channel}min" value="0">
+                <input class="max" type="range" min="0" max="65535" step="1" name="channel{channel}max" value="65535">
+            </label>
+        </div>
+    </details>
+</footer>
+
+<div id="command-line">
+    <input type="text" name="command" autocomplete="off">
+</div>
+
+<div id="fetched-images"></div>
+<div id="raw-canvases"></div>
+
+</body>
+</html>

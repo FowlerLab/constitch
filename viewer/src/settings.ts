@@ -1,6 +1,6 @@
 import {onScreenChange, onSettingsChange} from './display';
 import {globalColorMat, globalBounds} from './colors';
-import {info} from './main';
+import {info} from './config';
 
 /// Form functions
 
