@@ -1219,6 +1219,7 @@ class CompositeImage:
             return solution1
         return solution2
 
+    #AML - updated stitch to maintain nans at empty image positions
     def stitch(self, merger='mean', indices=None, real_images=None, out=None, bg_value=None, return_bg_mask=False,
             mins=None, maxes=None, keep_zero=False, use_executor=True, prevent_resize=False, **kwargs):
         """ Combines images in the composite into a single image
@@ -1317,11 +1318,13 @@ class CompositeImage:
         example_image = real_images[0]
         
         full_shape = tuple((maxes - mins) * self.scale) + example_image.shape[2:]
-        merger.create_image(full_shape, example_image.dtype)
+        merger.create_image(full_shape, np.float32)
+        
         if out is not None:
-            assert merger.image.shape == out.shape and merger.image.dtype == out.dtype, (
-                "Provided output image does not match expected shape or dtype: {} {}".format(merger.image.shape, merger.image.dtype))
+            assert merger.image.shape == out.shape, (
+                "Provided output image does not match expected shape: {}".format(merger.image.shape))
             merger.image = out
+        
 
         #import matplotlib.pyplot as plt
         #fig, axis = plt.subplots()
@@ -1363,9 +1366,9 @@ class CompositeImage:
 
                 x1, y1 = pos1
                 x2, y2 = pos2
-                #axis.plot([x1, x1, x2, x2, x1], [y1, y2, y2, y1, y1])
                 position = (slice(pos1[0], pos2[0]), slice(pos1[1], pos2[1]))
-                #merger.add_image(image, position)
+                #change image dtype to np.float32 to support nans later....
+                image = image.astype(np.float32)
                 future = self.executor.submit(_merge_job, merger, image=image, location=position)
                 futures.append(future)
 
@@ -1374,16 +1377,25 @@ class CompositeImage:
             self.debug ('  done,', len(indices_skipped), ' remaining')
             indices_left = indices_skipped
 
+        #a
         full_image, mask = merger.final_image()
-
-        #fig.savefig('plots/merger_locations.png')
-
-        if bg_value is not None:
-            full_image[mask] = bg_value
+        
+        #AML 7/10/26
+        #change so that the bg_value by default is nan 
+        #mask is all places which were filled by the merger (dists == 0 is unfilled)
+        #do this to fulL_image OR to the merger.image if we are using an out argument
+        if out is None:
+            #full_image = full_image.astype(np.float32)
+            #self.debug ('stitch full_image (no masking yet), new dtype', type(full_image), full_image, full_image.shape, full_image.dtype)
+            full_image[~mask] = None
+        else:
+            #merger.image = merger.image.astype(np.float32)
+            merger.image[~mask] = None
         
         if return_bg_mask:
             return full_image, mask
         return full_image
+
 
     def plot_scores(self, path, constraints=None, score_func=None, axis_size=12, constraint_multiplier=1):
         import matplotlib.pyplot as plt
