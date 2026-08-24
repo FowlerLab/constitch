@@ -21,15 +21,15 @@ export function convertImage(imagetag, info, colormat, bounds, canvastag) {
         ctx = canvas.getContext('2d');
     }
 
-    canvastag.width = info.dims[0];
-    canvastag.height = info.dims[1];
+    canvastag.width = info.dims[1];
+    canvastag.height = info.dims[0];
 
     const imageData = ctx.getImageData(0, 0, canvas.width, canvas.height);
 
     const destCtx = canvastag.getContext('2d');
     const destData = destCtx.getImageData(0, 0, canvastag.width, canvastag.height)
 
-    const numChannels = info.shape[0];
+    const numChannels = (info.shape.length == 2) ? 1 : info.shape[0];
     const channelOffset = destData.data.length;
 
     for (let i = 0; i < destData.data.length; i += 4) {

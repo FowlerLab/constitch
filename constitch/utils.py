@@ -5,6 +5,7 @@ import json
 import time
 import sys
 import math
+import string
 
 
 def memory_report():
@@ -329,4 +330,280 @@ def lfsr(value, bounds):
         value = ((value << 1) & ((1 << bits) - 1)) | newbit
         if value <= bounds:
             return value
+
+""" Helper functions to load in an exported harmony archive as a
+zarr array
+
+This allows for easy manipulation of all of the images.
+
+For example, to take a max projection then stitch all images together:
+
+    import memmap, zarr
+
+    store = memmap.memmap('path/do/dir/', row=1, col=2, channel='DAPI')
+    images = zarr.open(store)
+    print (images.shape)
+    # (34, 22, 11, 1080, 1080)
+    full_image = images.max(axis=2).transpose(0, 2, 1, 3).reshape(34 * 1080, 22 * 1080)
+    tifffile.imwrite('stitched_dapi.tif', full_image)
+
+"""
+
+import glob
+import sys
+import os
+import numpy as np
+import tifffile
+import re
+import math
+
+
+
+def open_sequence(path, shape=None, ranges=None, debug=False):
+    glob_pattern = re.sub(r'({[^{}]?[^}]*})+', '*', path)
+
+    if shape is not None:
+        if type(ranges) != dict:
+            ranges = dict(enumerate(ranges))
+        for i in range(len(shape)):
+            if i not in ranges:
+                ranges[i] = range(shape[i])
+
+    regex_pattern, regex_pattern_short = format_to_regex(path, ranges, remove_prefix=True)
+
+    if debug:
+        print ("Glob pattern:", glob_pattern, file=sys.stderr)
+        print ("Regex pattern:", regex_pattern, file=sys.stderr)
+        #print ("Regex pattern short:", regex_pattern_short, file=sys.stderr)
+
+    files = []
+    poses = []
+
+    for file in glob.glob(glob_pattern):
+        match = regex_pattern.match(file)
+        if match:
+            files.append(file)
+            #pos = ()
+            #for i, (key, val) in enuerate(match.groupdict().items()):
+                #if 
+
+    fileseq = tifffile.TiffSequence(files=files, pattern=regex_pattern_short)
+    #store = fileseq.aszarr()
+    return fileseq
+
+
+
+
+import re
+import string
+
+
+_INT_RE = re.compile(
+    r"(?:(?P<fill>.)(?=[<>=^]))?"
+    r"(?P<align>[<>=^])?"
+    r"(?P<sign>[+\- ])?"
+    r"#?"
+    r"0?"
+    r"(?P<width>\d+)?"
+    r"(?P<group>[_,])?"
+    r"(?:\.\d+)?"
+    r"(?P<type>[bcdoxXn])?$"
+)
+
+_STR_RE = re.compile(
+    r"(?:(?P<fill>.)(?=[<>=^]))?"
+    r"(?P<align>[<>=^])?"
+    r"(?P<width>\d+)?"
+    r"(?:\.\d+)?"
+    r"(?P<type>[s])?$"
+)
+
+
+def format_to_regex(fmt: str, ranges=None, remove_prefix=False):
+    """
+    Convert a Python format string into a compiled regex.
+    ranges specifies additional ranges for formatted variables, either
+    as a single value, a sequence of values, or a range(...) instance
+
+    Examples
+    --------
+    >>> format_to_regex("file_{name}_{:02}.txt").pattern
+    '^file_(?P<name>.+?)_(?P<_0>\\d{2})\\.txt$'
+    """
+
+    formatter = string.Formatter()
+
+    parts = ["^"]
+    auto_index = 0
+
+    for literal, field_name, format_spec, conversion in formatter.parse(fmt):
+        if len(parts) == 1:
+            if '/' in literal:
+                index = literal.rfind('/') + 1
+                parts.append(re.escape(literal[:index]))
+                literal = literal[index:]
+            else:
+                parts.append('')
+        parts.append(re.escape(literal))
+
+        if field_name is None:
+            continue
+
+        constraint = _lookup_range(ranges, field_name, auto_index)
+
+        # Group names must be valid Python identifiers.
+        if field_name == "":
+            group = f"_{auto_index}"
+        else:
+            group = field_name
+        auto_index += 1
+
+        if constraint is not None:
+            regex = _range_regex(constraint, format_spec)
+        else:
+            regex = None
+
+            # Integer formatting
+            m = _INT_RE.fullmatch(format_spec)
+            if m and (m.group("type") or "0" in format_spec):
+                width = m.group("width")
+
+                if width:
+                    regex = rf"\d{{{width}}}"
+                else:
+                    regex = r"\d+"
+
+            # String formatting
+            if regex is None:
+                m = _STR_RE.fullmatch(format_spec)
+                if m:
+                    width = m.group("width")
+
+                    if width:
+                        regex = rf".{{{width}}}"
+                    else:
+                        regex = r".+?"
+
+            # Unknown format: fall back to non-greedy match.
+            if regex is None:
+                regex = r".+?"
+
+        parts.append(rf"(?P<{group}>{regex})")
+
+    parts.append("$")
+    if remove_prefix:
+        return re.compile("".join(parts)), re.compile(''.join(parts[2:]))
+    return re.compile("".join(parts))
+
+
+def _range_regex(constraint, format_spec):
+    """Return a regex matching exactly the formatted values."""
+
+    if isinstance(constraint, str):
+        return constraint
+
+    # more efficient to just use the trie compression
+    #if isinstance(constraint, range) and constraint.step == 1:
+        #return regex_for_range(constraint.start, constraint.stop)
+
+    #formatted = [format(v, format_spec) for v in constraint] # constraint is iterable
+    #formatted = sorted(set(formatted), key=len, reverse=True)
+    regex = trie_regex(format(v, format_spec) for v in constraint)
+    return regex
+
+    #return "(?:" + "|".join(map(re.escape, formatted)) + ")"
+
+def _lookup_range(ranges, field_name, auto_index):
+    if ranges is None:
+        return None
+
+    if isinstance(ranges, dict):
+        if field_name:
+            if field_name in ranges:
+                return ranges[field_name]
+
+        if auto_index in ranges:
+            return ranges[auto_index]
+
+        return None
+
+    # sequence
+    if auto_index < len(ranges):
+        return ranges[auto_index]
+
+    return None
+
+
+_END = object()
+
+
+def trie_regex(strings):
+    """
+    Convert an iterable of literal strings into a compact regex.
+
+    Examples
+    --------
+    >>> trie_regex(["cat", "car", "cab"])
+    'ca[brt]'
+
+    >>> trie_regex(["dapi", "gfp", "rfp", "cfp"])
+    '(?:dapi|[cgr]fp)'
+    """
+
+    root = {}
+
+    # Build trie
+    for s in map(str, strings):
+        node = root
+        for ch in s:
+            node = node.setdefault(ch, {})
+        node[_END] = True
+
+    return _node_regex(root)
+
+
+def _node_regex(node):
+    terminal = _END in node
+
+    # Compile each child
+    branches = []
+
+    # Sort for deterministic output
+    for ch in sorted(k for k in node if k is not _END):
+        branches.append((ch, _node_regex(node[ch])))
+
+    if not branches:
+        return ""
+
+    # Merge children with identical suffixes
+    groups = {}
+    for ch, suffix in branches:
+        groups.setdefault(suffix, []).append(ch)
+
+    parts = []
+
+    for suffix, chars in groups.items():
+        if len(chars) == 1:
+            prefix = re.escape(chars[0])
+        else:
+            escaped = "".join(sorted(re.escape(c) for c in chars))
+            prefix = f"[{escaped}]"
+
+        parts.append(prefix + suffix)
+
+    if len(parts) == 1:
+        body = parts[0]
+    else:
+        body = "(?:" + "|".join(parts) + ")"
+
+    if terminal:
+        if len(parts) == 1:
+            body += "?"
+        else:
+            body = "(?:" + body + ")?"
+
+    return body
+
+
+
 

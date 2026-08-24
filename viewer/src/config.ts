@@ -1,6 +1,7 @@
 
 export let info = {
     'shape': [6, 1000, 1000],
+    'numchannels': 6,
     'dtype': 'uint16',
     'percentiles': {0.1: 96, 1: 111, 99: 3132, 99.9: 8087},
     'percentiles_separate': {

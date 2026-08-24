@@ -80,4 +80,67 @@ def image_to_base64(image, format='png'):
 
 
 
+def encode_image2(image, extra_channel=1):
+    """ Encodes a 16bit image into a 3 channel jpeg image. Only allows 2d images, as opposed to
+    encode_image, and is designed to support jpeg compression
+    """
+    assert image.ndim == 2 and image.dtype == np.uint16
+
+    newimage = np.zeros(image.shape + (3,), np.uint8)
+    bits = np.zeros(image.shape, np.uint16)
+
+    for srcbit in range(16):
+        channel = (extra_channel + srcbit) % 3
+        destbit = 7 - (15 - srcbit) // 3
+        #bits = image & (1 << srcbit)
+        np.bitwise_and(image, 1 << srcbit, out=bits)
+        #print (bin(bits[0,0]), bin(image[0,0] & (1 << srcbit)))
+
+        if srcbit > destbit:
+            bits >>= srcbit - destbit
+            #print (srcbit - destbit)
+        else:
+            bits <<= destbit - srcbit
+            #print (destbit - srcbit)
+
+        #print (bin(bits[0,0]))
+
+        newimage[:,:,channel] |= bits
+        #print (bin(image[0,0]), image[0,0], list(map(bin, newimage[0,0])), newimage[0,0], srcbit, channel, destbit)
+
+    return newimage
+
+def round_uint8(image, power, out=None):
+    roundto = 1 << power
+    out = np.clip(image, 0, 255 - roundto // 2, out=out)
+    np.add(out, roundto // 2, out=out)
+    np.bitwise_and(out, ~np.uint8(roundto - 1), out=out)
+    return out
+
+def decode_image2(image, extra_channel=1):
+    assert image.ndim == 3 and image.shape[-1] == 3 and image.dtype == np.uint8
+
+    round_uint8(image[:,:,extra_channel], 2, out=image[:,:,extra_channel])
+    round_uint8(image[:,:,(extra_channel+1)%3], 3, out=image[:,:,(extra_channel+1)%3])
+    round_uint8(image[:,:,(extra_channel+2)%3], 3, out=image[:,:,(extra_channel+2)%3])
+
+    newimage = np.zeros(image.shape[:2], np.uint16)
+    bits = np.zeros(image.shape[:2], np.uint16)
+
+    for destbit in range(16):
+        channel = (extra_channel + destbit) % 3
+        srcbit = 7 - (15 - destbit) // 3
+        np.bitwise_and(image[:,:,channel], 1 << srcbit, out=bits)
+
+        if srcbit > destbit:
+            bits >>= srcbit - destbit
+        else:
+            bits <<= destbit - srcbit
+
+        newimage |= bits
+        #print (list(map(bin, image[0,0])), image[0,0], bin(newimage[0,0]), newimage[0,0], srcbit, channel, destbit)
+
+    return newimage
+
+
 

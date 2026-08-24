@@ -7,7 +7,9 @@ const HtmlInlineScriptPlugin = require('html-inline-script-webpack-plugin');
 module.exports = (env) => {
     if (env.production) {
         return {
-            mode: "production",
+            //mode: "production",
+            mode: "development",
+            devtool: "inline-source-map",
             entry: {
                 main: "./src/main.ts",
             },
@@ -22,8 +24,9 @@ module.exports = (env) => {
                     /.\/config\.ts/,
                     './config.production.ts'
                 ), new HtmlWebpackPlugin({
-                    template: "src/index.html",
-                }), new HtmlInlineScriptPlugin()],
+                        template: "src/index.html"}),
+                    //new HtmlInlineScriptPlugin(),
+                ],
         };
     } else {
         return {
@@ -40,9 +43,10 @@ module.exports = (env) => {
                 extensions: [".ts", ".tsx", ".js"],
             },
             plugins: [new HtmlWebpackPlugin({
-                    filename: "test.html",
-                    template: "src/index.html",
-                }), new HtmlInlineScriptPlugin()],
+                        filename: "test.html",
+                        template: "src/index.html"}),
+                    //new HtmlInlineScriptPlugin(),
+                ],
         };
     }
 };

@@ -1,10 +1,10 @@
 import {convertImage, transformIn, transformOut, intersection} from "./image";
 import {onKeyDownCommands} from "./commands";
 import {exampleImage} from "./config";
-import {globalColorMat, globalBounds} from "./colors";
+//import {globalColorMat, globalBounds} from "./colors";
 
 export let activeImages = {};
-export let globalScreenBox = [0, 0, Math.round(window.innerWidth * 2), Math.round(window.innerHeight * 2)];
+export let globalScreenBox = [0, 0, Math.round(window.innerHeight * 2), Math.round(window.innerWidth * 2)];
 
 let lastUpdate = Date.now();
 
@@ -26,7 +26,7 @@ export function assignIds(image, begin) {
 
 function setImagePos(image, box) {
     //const box = transformIn(screenBox, {width: window.innerWidth, height: window.innerHeight}, image.box)
-    image.canvas.style.transform = 'translate(' + box[0] + 'px, ' + box[1] + 'px)';
+    image.canvas.style.transform = 'translate(' + box[1] + 'px, ' + box[0] + 'px)';
     //image.canvas.style.left = box[0] + 'px';
     //image.canvas.style.top = box[1] + 'px';
     //image.canvas.style.width = box[2] + 'px';
@@ -36,7 +36,13 @@ function setImagePos(image, box) {
 function removeImage(image) {
     if (image.id in activeImages) {
         delete activeImages[image.id];
-        document.getElementById('fetched-images').appendChild(image.canvas);
+        if (image.rendered) {
+            document.getElementById('fetched-images').appendChild(image.canvas);
+        } else {
+            image.canvas.remove();
+            delete image.canvas
+            image.loaded = false;
+        }
     }
 
     if ('images' in image) {
@@ -67,7 +73,7 @@ export function drawMinimap(baseImage, image, canvas, ctx) {
     }
 
     const box = transformIn(baseImage.box, {width: canvas.width - 2, height: canvas.height - 2}, image.box);
-    ctx.strokeRect(box[0] + 1, box[1] + 1, box[2], box[3]);
+    ctx.strokeRect(box[1] + 1, box[0] + 1, box[3], box[2]);
 }
 
 export function updateMinimap(screenBox, baseImage) {
@@ -79,10 +85,10 @@ export function updateMinimap(screenBox, baseImage) {
     const solidBox = intersection([-5, -5, 110, 110], box);
     solidBox[2] = Math.max(0, solidBox[2]);
     solidBox[3] = Math.max(0, solidBox[3]);
-    viewbox.style.left = solidBox[0] + '%';
-    viewbox.style.top = solidBox[1] + '%';
-    viewbox.style.width = solidBox[2] + '%';
-    viewbox.style.height = solidBox[3] + '%';
+    viewbox.style.top = solidBox[0] + '%';
+    viewbox.style.left = solidBox[1] + '%';
+    viewbox.style.height = solidBox[2] + '%';
+    viewbox.style.width = solidBox[3] + '%';
 
     const clipBox = intersection([0, 0, 100, 100], box);
     clipBox[2] = Math.max(0, clipBox[2]);
@@ -90,15 +96,15 @@ export function updateMinimap(screenBox, baseImage) {
     //const clipBox = [Math.max(0, box[0]), Math.max(0, box[1]), box[2] + Math.min(0, box[0]), box[3] + Math.min(0, box[1])];
     //clipBox[2] = Math.min(100 - box[0], box[2]);
     //clipBox[3] = Math.min(100 - box[1], box[3]);
-    viewboxDashed.style.left = clipBox[0] + '%';
-    viewboxDashed.style.top = clipBox[1] + '%';
-    viewboxDashed.style.width = clipBox[2] + '%';
-    viewboxDashed.style.height = clipBox[3] + '%';
+    viewboxDashed.style.top = clipBox[0] + '%';
+    viewboxDashed.style.left = clipBox[1] + '%';
+    viewboxDashed.style.height = clipBox[2] + '%';
+    viewboxDashed.style.width = clipBox[3] + '%';
     console.log(clipBox);
     console.log(viewbox.style.left);
 }
 
-export function updateActiveImages(screenBox, colormat, image) {
+export function updateActiveImages(screenBox, colormat, bounds, image, parentImage) {
     const radius = 0;//-100;
     const bigScreenBox = [screenBox[0] - radius, screenBox[1] - radius, screenBox[2] + radius * 2, screenBox[3] + radius * 2];
 
@@ -110,7 +116,7 @@ export function updateActiveImages(screenBox, colormat, image) {
 
     //console.log(i, image.box, curSection, bigScreenBox)
     image.visible = curSection[2] > 0 && curSection[3] > 0
-    image.pixelSize = image.box[2] / image.dims[0] * window.innerWidth / screenBox[2];
+    image.pixelSize = image.box[2] / image.dims[0] * window.innerHeight / screenBox[2];
     //console.log('pixelsize', image.pixelSize)
 
     if (!image.visible) {
@@ -122,7 +128,7 @@ export function updateActiveImages(screenBox, colormat, image) {
             //document.getElementById('fetched-images').appendChild(image.canvas);
 
             //if ('images' in image && image.images.length != 0) {
-                //updateActiveImages(screenBox, colormat, image.images)
+                //updateActiveImages(screenBox, colormat, bounds, image.images, image)
             //}
         }
         return;
@@ -131,7 +137,7 @@ export function updateActiveImages(screenBox, colormat, image) {
     if (!('url' in image)) {
         if ('images' in image) {
             for (let subimage of image.images) {
-                updateActiveImages(screenBox, colormat, subimage);
+                updateActiveImages(screenBox, colormat, bounds, subimage, image);
             }
         }
         return;
@@ -142,7 +148,7 @@ export function updateActiveImages(screenBox, colormat, image) {
         let meanPixelSize = 0;
         let isActiveChild = false;
         for (let subImage of image.images) {
-            meanPixelSize += subImage.box[2] / subImage.dims[0] * window.innerWidth / screenBox[2];
+            meanPixelSize += subImage.box[2] / subImage.dims[0] * window.innerHeight / screenBox[2];
             isActiveChild = isActiveChild || (subImage.id in activeImages);
         }
         meanPixelSize /= image.images.length;
@@ -155,7 +161,7 @@ export function updateActiveImages(screenBox, colormat, image) {
                 document.getElementById('fetched-images').appendChild(image.canvas);
             }
             for (let subimage of image.images) {
-                updateActiveImages(screenBox, colormat, subimage);
+                updateActiveImages(screenBox, colormat, bounds, subimage, image);
             }
             return;
         }
@@ -166,8 +172,8 @@ export function updateActiveImages(screenBox, colormat, image) {
         const img = document.createElement('img');
 
         const canvas = document.createElement('canvas');
-        canvas.width = image.dims[0];
-        canvas.height = image.dims[1];
+        canvas.height = image.dims[0];
+        canvas.width = image.dims[1];
         canvas.classList.add('image');
         canvas.id = image.id
         image.canvas = canvas;
@@ -177,27 +183,53 @@ export function updateActiveImages(screenBox, colormat, image) {
         }
 
         const ctx = canvas.getContext('2d');
-        ctx.fillStyle = 'black';
-        ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+        // prerender with prev canvas contents
+        if (parentImage != undefined && 'canvas' in parentImage) {
+            const srcBox = transformIn(parentImage.box, {width: parentImage.dims[0], height: parentImage.dims[1]}, image.box);
+            //console.log('transform in', ...parentImage.box, parentImage.width, parentImage.height, ...image.box)
+            console.log('copying', parentImage.canvas, ...srcBox, 0, 0, canvas.width, canvas.height);
+            //ctx.drawImage(parentImage.canvas, ...srcBox, 0, 0, canvas.width, canvas.height);
+            ctx.drawImage(parentImage.canvas, srcBox[1], srcBox[0], srcBox[3], srcBox[2], 0, 0, canvas.height, canvas.width);
+        } else {
+            ctx.fillStyle = 'black';
+            ctx.fillRect(0, 0, canvas.width, canvas.height);
+        }
 
         setImagePos(image, image.box);
-        image.canvas.style.width = image.box[2] + 'px';
-        image.canvas.style.height = image.box[3] + 'px';
+        image.canvas.style.height = image.box[2] + 'px';
+        image.canvas.style.width = image.box[3] + 'px';
         const begin = Date.now()
+        image.rendered = false;
+
         img.onload = () => {
             const mid = Date.now();
-            convertImage(img, image, colormat, globalBounds, canvas);
+            convertImage(img, image, colormat, bounds, canvas);
             console.log('    finished loading', mid - begin, Date.now() - mid);
             image.lastUpdate = Date.now();
+            image.rendered = true;
         };
-        img.src = image.url;
+
+        const loadingSetting = document.querySelector('input[name="loading-behaviour"]:checked').value;
+        if (loadingSetting == 'auto' || image.loading == 'auto') {
+            img.src = image.url;
+        } else {
+            const url = image.url;
+            const callback = (event) => {
+                if (event.shiftKey) {
+                    img.src = url;
+                    canvas.removeEventListener('click', callback);
+                }
+            };
+            canvas.addEventListener('click', callback);
+        }
 
         image.loaded = true;
         image.lastUpdate = Date.now();
     } else if (image.lastUpdate < lastUpdate) {
         console.log('  rerendering image', image.id);
         setTimeout(() => {
-            convertImage(null, image, colormat, globalBounds, image.canvas);
+            convertImage(null, image, colormat, bounds, image.canvas);
             image.lastUpdate = Date.now();
         }, 1);
         image.lastUpdate = Date.now();
@@ -206,6 +238,9 @@ export function updateActiveImages(screenBox, colormat, image) {
     if (!(image.id in activeImages)) {
         console.log('  adding back', image.id);
         activeImages[image.id] = image;
+        //const div = document.createElement('div')
+        //div.appendChild(image.canvas)
+        //document.getElementById('axes').appendChild(div);
         document.getElementById('axes').appendChild(image.canvas);
 
         if ('images' in image) {
@@ -215,27 +250,27 @@ export function updateActiveImages(screenBox, colormat, image) {
 
     // If this image was rendered don't go deeper
     //if ('images' in image && image.images.length != 0) {
-        //updateActiveImages(screenBox, colormat, image.images)
+        //updateActiveImages(screenBox, colormat, bounds, image.images, image)
     //}
     //}
 }
 
 function updatePoses(screenBox) {
     for (let image of Object.values(activeImages)) {
-        setImagePos(image, transformIn(screenBox, {width: window.innerWidth, height: window.innerHeight}, image.box));
+        setImagePos(image, transformIn(screenBox, {width: window.innerHeight, height: window.innerWidth}, image.box));
     }
 }
 
 function updateTransform(screenBox) {
     document.getElementById('axes').style.transform = (
-        'scale(' + (window.innerWidth / screenBox[2])
-        + ') translate(' + (-screenBox[0])
-        + 'px, ' + (-screenBox[1]) + 'px)');
+        'scale(' + (window.innerHeight / screenBox[2])
+        + ') translate(' + (-screenBox[1])
+        + 'px, ' + (-screenBox[0]) + 'px)');
 }
 
 
 export function resetScreenBox() {
-    const aspectRatio = window.innerWidth / window.innerHeight;
+    const aspectRatio = window.innerHeight / window.innerWidth;
     globalScreenBox = [...exampleImage.box];
     globalScreenBox[2] = Math.max(exampleImage.box[2], exampleImage.box[3] * aspectRatio);
     globalScreenBox[3] = Math.max(exampleImage.box[3], exampleImage.box[2] / aspectRatio);
@@ -251,7 +286,7 @@ export function onScreenChange() {
     timeoutId = setTimeout(() => {
         console.log('Updating active images', globalScreenBox);
         updateMinimap(globalScreenBox, exampleImage);
-        updateActiveImages(globalScreenBox, globalColorMat, exampleImage);
+        updateActiveImages(globalScreenBox, exampleImage.colorMat, exampleImage.bounds, exampleImage);
     }, 500);
 }
 
@@ -262,8 +297,9 @@ export function onViewChange() {
     timeoutId = setTimeout(() => {
         console.log('Updating active images', globalScreenBox);
         updateMinimap(globalScreenBox, exampleImage);
-        const loadingSetting = document.querySelector('input[name="loading-behaviour"]:checked').value;
-        if (loadingSetting == 'auto') updateActiveImages(globalScreenBox, globalColorMat, exampleImage);
+        //const loadingSetting = document.querySelector('input[name="loading-behaviour"]:checked').value;
+        //if (loadingSetting == 'auto')
+        updateActiveImages(globalScreenBox, exampleImage.colorMat, exampleImage.bounds, exampleImage);
     }, 500);
 }
 
@@ -290,10 +326,10 @@ export function undoAllMoves() {
 }
 
 
-document.getElementById('plot').addEventListener('click', (event) => {
+//document.getElementById('plot').addEventListener('click', (event) => {
     //const loadingSetting = document.querySelector('input[name="loading-behaviour"]:checked').value;
-    onScreenChange();
-});
+    //onScreenChange();
+//});
 
 document.getElementById('plot').addEventListener('mousedown', (event) => {
     const tool = document.querySelector('input[name="tool"]:checked').value
@@ -318,15 +354,15 @@ document.getElementById('plot').addEventListener('mousemove', (event) => {
     const tool = document.querySelector('input[name="tool"]:checked').value
 
     if (tool == 'pan') {
-        globalScreenBox[0] += -event.movementX * (globalScreenBox[2] / window.innerWidth);
-        globalScreenBox[1] += -event.movementY * (globalScreenBox[3] / window.innerHeight);
+        globalScreenBox[0] += -event.movementY * (globalScreenBox[2] / window.innerHeight);
+        globalScreenBox[1] += -event.movementX * (globalScreenBox[3] / window.innerWidth);
     } else if (tool == 'move') {
         const prevstate = {};
         for (const canvas of document.querySelectorAll('.image.selected')) {
             const image = activeImages[canvas.id];
             prevstate[canvas.id] = [image.box[0], image.box[1]];
-            image.box[0] += event.movementX * (globalScreenBox[2] / window.innerWidth);
-            image.box[1] += event.movementY * (globalScreenBox[3] / window.innerHeight);
+            image.box[0] += event.movementY * (globalScreenBox[2] / window.innerHeight);
+            image.box[1] += event.movementX * (globalScreenBox[3] / window.innerWidth);
             setImagePos(image, image.box)
         }
         undoList.push(prevstate);
@@ -345,8 +381,8 @@ document.getElementById('plot').addEventListener('wheel', (event) => {
     //}
     const deltaScale = Math.exp(event.deltaY * 0.0015);
     if (deltaScale != 1) {
-        globalScreenBox[0] += event.clientX * (1 - deltaScale) * (globalScreenBox[2] / window.innerWidth);
-        globalScreenBox[1] += event.clientY * (1 - deltaScale) * (globalScreenBox[3] / window.innerHeight);
+        globalScreenBox[0] += event.clientY * (1 - deltaScale) * (globalScreenBox[2] / window.innerHeight);
+        globalScreenBox[1] += event.clientX * (1 - deltaScale) * (globalScreenBox[3] / window.innerWidth);
         globalScreenBox[2] *= deltaScale;
         globalScreenBox[3] *= deltaScale;
         //scaleMidpoint = [event.clientX, event.clientY];
@@ -363,12 +399,12 @@ document.addEventListener('keydown', (event) => {
     }
 })
 
-let windowSize = [window.innerWidth, window.innerHeight];
+let windowSize = [window.innerHeight, window.innerWidth];
 
 window.addEventListener('resize', (event) => {
-    globalScreenBox[2] *= window.innerWidth / windowSize[0];
-    globalScreenBox[3] *= window.innerHeight / windowSize[1];
-    windowSize = [window.innerWidth, window.innerHeight];
+    globalScreenBox[2] *= window.innerHeight / windowSize[0];
+    globalScreenBox[3] *= window.innerWidth / windowSize[1];
+    windowSize = [window.innerHeight, window.innerWidth];
     onViewChange();
     updateTransform(globalScreenBox);
 })
