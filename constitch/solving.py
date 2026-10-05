@@ -71,30 +71,46 @@ class LinearSolver(Solver):
     solves it using least squares.
     """
 
+    # Whether make_constraint_matrix returns a scipy.sparse matrix instead of a dense array.
+    # Only enable for subclasses whose solve_matrix supports sparse input.
+    sparse = False
+
     def __init__(self, model=None):
         self.model = model or sklearn.linear_model.LinearRegression(fit_intercept=False)
 
     def make_constraint_matrix(self, constraints, initial_poses):
+        import scipy.sparse
+
         image_indices = sorted(list(initial_poses.keys()))
-        solution_mat = np.zeros((len(constraints)*2+2, len(image_indices)*2))
-        solution_vals = np.zeros(len(constraints)*2+2)
-        
+        index_lookup = {image_id: i for i, image_id in enumerate(image_indices)}
+        num_rows, num_cols = len(constraints)*2+2, len(image_indices)*2
+        solution_vals = np.zeros(num_rows)
+
+        # each constraint has 4 nonzero entries, plus 2 for the anchor
+        rows = np.empty(len(constraints)*4+2, dtype=np.int64)
+        cols = np.empty(len(constraints)*4+2, dtype=np.int64)
+        vals = np.empty(len(constraints)*4+2)
+
         for index, ((id1, id2), constraint) in enumerate(constraints.items()):
-            id1, id2 = image_indices.index(id1), image_indices.index(id2)
+            id1, id2 = index_lookup[id1], index_lookup[id2]
             dx, dy = constraint.dx, constraint.dy
             score = self.score_func(constraint)
 
-            solution_mat[index*2, id1*2] = -score
-            solution_mat[index*2, id2*2] = score
-            solution_vals[index*2] = score * dx
+            rows[index*4:index*4+4] = (index*2, index*2, index*2+1, index*2+1)
+            cols[index*4:index*4+4] = (id1*2, id2*2, id1*2+1, id2*2+1)
+            vals[index*4:index*4+4] = (-score, score, -score, score)
 
-            solution_mat[index*2+1, id1*2+1] = -score
-            solution_mat[index*2+1, id2*2+1] = score
+            solution_vals[index*2] = score * dx
             solution_vals[index*2+1] = score * dy
 
         # anchor tile 0 to 0,0, otherwise there are inf solutions
-        solution_mat[-2, 0] = 1
-        solution_mat[-1, 1] = 1
+        rows[-2:] = (num_rows-2, num_rows-1)
+        cols[-2:] = (0, 1)
+        vals[-2:] = 1
+
+        solution_mat = scipy.sparse.csr_matrix((vals, (rows, cols)), shape=(num_rows, num_cols))
+        if not self.sparse:
+            solution_mat = solution_mat.toarray()
 
         initial_values = np.array(list(initial_poses.values()))
 
@@ -113,7 +129,7 @@ class LinearSolver(Solver):
 
             poses = solution.reshape(-1,2)
 
-            residuals = np.matmul(solution_mat, solution) - solution_vals
+            residuals = solution_mat @ solution - solution_vals
             residuals = residuals.reshape(-1,2)
             print (np.mean(np.abs(residuals)), file=sys.stderr)
             self.constraints_accuracy = dict(zip(constraints.keys(), residuals))
@@ -143,7 +159,7 @@ class LinearSolver(Solver):
         poses = np.round(poses).astype(int)
         poses -= poses.min(axis=0).reshape(1,2)
 
-        residuals = np.matmul(solution_mat, poses.reshape(-1)) - solution_vals
+        residuals = solution_mat @ poses.reshape(-1) - solution_vals
         residuals = residuals.reshape(-1,2)
         print ('after round', np.mean(np.abs(residuals)), file=sys.stderr)
 
@@ -158,7 +174,7 @@ class LinearSolver(Solver):
         poses = np.array([rounded_poses[i] for i in initial_poses.keys()])
         #poses = np.array(list(rounded_poses.values()))
 
-        residuals = np.matmul(solution_mat, poses.reshape(-1)) - solution_vals
+        residuals = solution_mat @ poses.reshape(-1) - solution_vals
         residuals = residuals.reshape(-1,2)
         print ('after round', np.mean(np.abs(residuals)), file=sys.stderr)
         return rounded_poses
@@ -183,6 +199,8 @@ class MAESolver(LinearSolver):
     sklearn.linear_model.QuantileRegressor. By default the L1 regularization constant
     alpha=0 and fit_intercept=False, unless specified in the constructor.
     """
+    sparse = True
+
     def __init__(self, **kwargs):
         params = dict(alpha=0, fit_intercept=False, solver='highs')
         params.update(kwargs)
@@ -198,6 +216,8 @@ class LPSolver(LinearSolver):
     the resulting values to be integers, which removes any errors that might come from
     rounding the solution values.
     """
+    sparse = True
+
     def __init__(self, integral=True):
         super().__init__(model=None)
         self.integral = integral

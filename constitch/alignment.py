@@ -227,7 +227,7 @@ class FFTAligner(Aligner):
 class PaddedFFTAligner(FFTAligner):
 
     def precalculate(self, image, box=None):
-        error_not_implemented
+        
         if len(image.shape) == 3: image = image[:,:,0]
         image = self.resize_if_needed(image, box, downscale_factor=self.downscale_factor, padding=box.size[:2])
         fft = None if not self.precalculate_fft else np.fft.fft2(image, axes=(0,1))
